@@ -2,6 +2,17 @@ import cv2
 import numpy as np
 
 def read_video_file(video_path):
+    """
+    Reads a video file and returns a 3D Numpy array containing the video frames, with time as axis 0.
+    Only monochrome videos are supported, and color videos are converted to greyscale.
+
+    Args:
+        video_path: String path to the video file.
+
+    Returns:
+        video_array: 3D Numpy array of 8 bit unsigned integers containing the video frames, with time as axis 0.
+    """
+    
     cap = cv2.VideoCapture(video_path)
 
     if not cap.isOpened():
@@ -10,13 +21,13 @@ def read_video_file(video_path):
     frames = []
 
     while True:
-            ret, frame = cap.read()
-            if not ret:
-                break  # End of video
-            
-            # Convert frame to greyscale
-            grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-            frames.append(grey_frame.astype(np.uint8))
+        ret, frame = cap.read()
+        if not ret:
+            break  # End of video
+        
+        # Convert frame to greyscale
+        grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        frames.append(grey_frame.astype(np.uint8))
         
     cap.release()
         
@@ -25,10 +36,19 @@ def read_video_file(video_path):
     return video_array
 
 def write_mp4(video_array, out_path, fps=60):
+    """
+    Writes a 3D Numpy array containing video frames to an MP4 file.
+
+    Args:
+        video_array: 3D Numpy array containing the video frames, with time as axis 0.
+        out_path: String path to the output MP4 file.
+        fps: Integer value for the frames per second to write the video at. Default is 60.
+    """
+    
     num_frames = video_array.shape[0]
     height = video_array.shape[1] 
     width = video_array.shape[2]
-    if len(video_array.shape) > 3:
+    if len(video_array.shape) > 3: # allow for color or monochrome input videos
         isColor = True
     else:
         isColor = False
@@ -51,6 +71,15 @@ def write_mp4(video_array, out_path, fps=60):
     print(f"Video successfully written to {out_path}")
 
 def write_avi(video_array, out_path, fps=60):
+    """
+    Writes a 3D Numpy array containing video frames to an AVI file.
+
+    Args:
+        video_array: 3D Numpy array containing the video frames, with time as axis 0.
+        out_path: String path to the output AVI file.
+        fps: Integer value for the frames per second to write the video at. Default is 60.
+    """
+    
     num_frames = video_array.shape[0]
     height = video_array.shape[1] 
     width = video_array.shape[2]
