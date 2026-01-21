@@ -111,7 +111,7 @@ def create_time_encoded_array(average_subtracted_array, colormap=np.array([[0,0,
         light_background: Boolean value for the light background.
 
     Returns:
-        time_encoded_array: 3D Numpy array of 8 bit unsigned integers containing the time encoded array of frames with trails, with time as axis 0.
+        time_encoded_array: 4D Numpy array of 8 bit unsigned integers containing the time encoded array of frames with trails, with time as axis 0 and color channel as axis 3 (last axis).
     """
     
     time_encoded_array = []
@@ -138,7 +138,7 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
         light_background: Boolean value for the light background.
 
     Returns:
-        time_encoded_frame: 2D Numpy array of 8 bit unsigned integers containing the time encoded frame with trails.
+        time_encoded_frame: 3D Numpy array of 8 bit unsigned integers containing the time encoded frame with trails with color channel as axis 3 (last axis).
     """
     mono_array = average_subtracted_array[start_time:start_time+window,:,:] # take just the frames within the window to be projected down along the time axis
     colormapped_array = []
@@ -163,19 +163,19 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
 def add_timestamp(video_array, black_background = True, font_scale=1, font_thickness=1, seconds_per_frame=1):
     """
     Adds a timestamp to each frame of the video array.
-    This should be done last in the processing pipeline.
+    This should be done last in the processing pipeline, after time encoding returns a color array.
     
     Args:
-        video_array: 3D Numpy array containing the video frames, with time as axis 0.
+        video_array: 4D Numpy array containing the video frames, with time as axis 0 and color channel as axis 3 (last axis).
         black_background: Boolean value for whether a black background is used.
         font_scale: Float value for the font scale.
         font_thickness: Integer value for the font thickness.
         seconds_per_frame: Float value for the frame time in seconds. This is the captured frame time, not the desired export frame time.
     
     Returns:
-        video_array: 3D Numpy array of 8 bit unsigned integers containing the video frames with timestamps, with time as axis 0.
+        video_array: 4D Numpy array of 8 bit unsigned integers containing the video frames with timestamps, with time as axis 0 and color channel as axis 3 (last axis).
     """
-    num_frames, height, width = video_array.shape
+    num_frames, height, width, channel = video_array.shape # only accepts color input, since the cv2.putText function requires a color image
     font = cv2.FONT_HERSHEY_SIMPLEX
     position = (10, height-10) # Bottom left corner
     if black_background:
@@ -187,9 +187,9 @@ def add_timestamp(video_array, black_background = True, font_scale=1, font_thick
     for i in range(num_frames):
         total_seconds = int(i*seconds_per_frame)
         timestamp = f"{(total_seconds // 60):02d}:{(total_seconds % 60):02d}" # Timestamp format mm:ss
-        color_frame = cv2.cvtColor(video_array[i].copy(), cv2.COLOR_GRAY2BGR) # the cv2.putText function requires a color image
-        cv2.putText(color_frame, timestamp, position, font, font_scale, (color, color, color), font_thickness)
-        video_array[i] = cv2.cvtColor(color_frame, cv2.COLOR_BGR2GRAY) # convert back to greyscale
+        timestamped_frame = video_array[i].copy()
+        cv2.putText(timestamped_frame, timestamp, position, font, font_scale, (color, color, color), font_thickness)
+        video_array[i] = timestamped_frame # replace original frame with timestamped frame
 
     return video_array
 
