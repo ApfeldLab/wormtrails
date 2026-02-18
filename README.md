@@ -11,7 +11,7 @@ conda activate wormtrails
 After downloading this repository, execute the following commands from the same directory as this README.md file to install wormtrails.
 ```
 conda install pip
-pip install -e .
+pip install .
 ```
 
 If they are not already installed, this will also install opencv and numpy, the requirements for wormtrails. 
