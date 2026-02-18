@@ -2,17 +2,20 @@ import cv2
 import numpy as np
 from .processing import correct_vignetting, subtract_average
 
-def count_video(video_array, min_size=10, max_size=300, thresh=170, motion_thresh=1, detailed_output=False, mask_plate=False):
+def count_video(video_array, min_size=10, max_size=300, thresh=170, motion_thresh=1, kernel_size=11, detailed_output=False, mask_plate=False):
     """
     Counts the number of living worms in a video array.
     Recordings of 30 seconds to 1 minute are recommended.
     
     Args:
-        video_array: 3D Numpy array containing the video frames, with time as axis 0.
+        video_array: 3D Numpy array containing the video frames, with time as axis 0
         min_size: Integer value for the minimum size of a potential worm in pixel area
         max_size: Integer value for the maximum size of a potential worm in pixel area
-        thresh: Integer value for the threshold for converting the video array to a binary array.
-        motion_thresh: Integer value for the threshold for motion detection.
+        thresh: Integer value for the threshold for converting the video array to a binary array
+        motion_thresh: Integer value for the threshold for motion detection
+        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction
+        detailed_output: Boolean value on whether to only return the count if False, or to also include visualizations of the detected worms
+        mask_plate: Boolean value on whether to mask the plate out from the background
     
     Returns:
         If detailed_output is False:
@@ -20,7 +23,7 @@ def count_video(video_array, min_size=10, max_size=300, thresh=170, motion_thres
         If detailed_output is True:
             A tuple containing the number of worms, the binary array, and the corrected array.
     """
-    corrected_array = correct_vignetting(video_array.copy()) # correct spatiotemporal brightness variation
+    corrected_array = correct_vignetting(video_array.copy(), kernel_size=kernel_size) # correct spatiotemporal brightness variation
     binary_array = np.where(corrected_array < thresh, 255, 0).astype(np.uint8) # convert to binary, objects darker than surroundings
     if mask_plate: # apply a plate mask to exclude edge artifacts
         binary_array *= create_plate_mask(video_array[0])
@@ -44,17 +47,20 @@ def count_video(video_array, min_size=10, max_size=300, thresh=170, motion_thres
     else:
         return n_moving
 
-def count_frame(frame, reference_frame, min_size=10, max_size=300, thresh=170, motion_thresh=1, detailed_output=False, mask_plate=False):
+def count_frame(frame, reference_frame, min_size=10, max_size=300, thresh=170, motion_thresh=1, kernel_size=11, detailed_output=False, mask_plate=False):
     """
     Counts the number of living worms in a frame.
     
     Args:
-        frame: 2D Numpy array containing the frame to be counted.
-        reference_frame: 2D Numpy array containing the reference frame.
+        frame: 2D Numpy array containing the frame to be counted
+        reference_frame: 2D Numpy array containing the reference frame
         min_size: Integer value for the minimum size of a potential worm in pixel area
         max_size: Integer value for the maximum size of a potential worm in pixel area
-        thresh: Integer value for the threshold for converting the frame to a binary array.
-        motion_thresh: Integer value for the threshold for motion detection.
+        thresh: Integer value for the threshold for converting the frame to a binary array
+        motion_thresh: Integer value for the threshold for motion detection
+        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction
+        detailed_output: Boolean value on whether to only return the count if False, or to also include visualizations of the detected worms
+        mask_plate: Boolean value on whether to mask the plate out from the background
     
     Returns:
         If detailed_output is False:
@@ -62,7 +68,7 @@ def count_frame(frame, reference_frame, min_size=10, max_size=300, thresh=170, m
         If detailed_output is True:
             A tuple containing the number of worms, the binary array, and the corrected array.
     """
-    corrected_frames = correct_vignetting(np.stack([frame, reference_frame], axis=0)) # correct spatiotemporal brightness variation
+    corrected_frames = correct_vignetting(np.stack([frame, reference_frame], axis=0), kernel_size=kernel_size) # correct spatiotemporal brightness variation
     binary_frame = np.where(corrected_frames[0] < thresh, 255, 0).astype(np.uint8) # convert to binary, objects darker than surroundings
     if mask_plate: # apply a plate mask to exclude edge artifacts
         binary_frame *= create_plate_mask(frame)
