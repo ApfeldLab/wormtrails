@@ -20,6 +20,14 @@ from .src.processing import (
     normalize_array
 )
 
+from .src.quantitative import (
+    count_video,
+    count_frame,
+    create_plate_mask,
+    validate_objects,
+    filter_objects_by_size
+)
+
 from .src.colormaps import (
     white_to_black,
     black_to_white,
