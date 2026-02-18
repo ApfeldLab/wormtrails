@@ -2,19 +2,22 @@ import cv2
 import numpy as np
 import math
 
-def correct_vignetting(video_array):
+def correct_vignetting(video_array, kernel_size=None):
     """
     Corrects vignetting in a video array by normalizing each frame to have the same brightness as the average frame and dividing by a blur of the average frame.
     This step can be skipped if initial scan is evenly lit and the lens used does not vignette.
+    Kernel size must be odd and smaller values will make smaller brightness variations get evened out.
 
     Args:
         video_array: 3D Numpy array containing the video frames, with time as axis 0.
+        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame. If None, the kernel size will be calculated as one quarter the image width.
 
     Returns:
         video_array: 3D Numpy array of 8 bit unsigned integers containing the corrected video frames, with time as axis 0.
     """
     average_frame = np.mean(video_array, axis=0)
-    kernel_size = int(average_frame.shape[0]/8) * 2 + 1 # Kernel size is one quarter the image width
+    if kernel_size is None:
+        kernel_size = int(average_frame.shape[0]/8) * 2 + 1 # Kernel size is one quarter the image width
     blur_frame = cv2.GaussianBlur(average_frame, (kernel_size,kernel_size), 0)
     target_brightness = np.mean(average_frame)
 
