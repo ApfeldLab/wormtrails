@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
-from .processing import correct_vignetting, subtract_average
+import pandas as pd
+from .processing import correct_vignetting, subtract_average, threshold_array
 
 def count_video(video_array, min_size=10, max_size=300, thresh=170, motion_thresh=1, kernel_size=11, detailed_output=False, mask_plate=False):
     """
@@ -23,12 +24,12 @@ def count_video(video_array, min_size=10, max_size=300, thresh=170, motion_thres
         If detailed_output is True:
             A tuple containing the number of worms, the binary array, and the corrected array.
     """
-    corrected_array = correct_vignetting(video_array.copy(), kernel_size=kernel_size) # correct spatiotemporal brightness variation
-    binary_array = np.where(corrected_array < thresh, 255, 0).astype(np.uint8) # convert to binary, objects darker than surroundings
+    correct_vignetting(video_array, kernel_size=kernel_size, inplace=True) # correct spatiotemporal brightness variation
+    binary_array = threshold_array(video_array, thresh, dark_objects=True) # convert to binary, objects darker than surroundings
     if mask_plate: # apply a plate mask to exclude edge artifacts
         binary_array *= create_plate_mask(video_array[0])
     
-    motion_array = subtract_average(corrected_array.copy()) # create array containing only pixels which changed in value over the course of the recording
+    motion_array = subtract_average(video_array, inplace=False) # create array containing only pixels which changed in value over the course of the recording
 
     # Look for objects fitting the size requirements in each frame
     highest_count = 0
@@ -68,12 +69,12 @@ def count_frame(frame, reference_frame, min_size=10, max_size=300, thresh=170, m
         If detailed_output is True:
             A tuple containing the number of worms, the binary array, and the corrected array.
     """
-    corrected_frames = correct_vignetting(np.stack([frame, reference_frame], axis=0), kernel_size=kernel_size) # correct spatiotemporal brightness variation
-    binary_frame = np.where(corrected_frames[0] < thresh, 255, 0).astype(np.uint8) # convert to binary, objects darker than surroundings
+    corrected_frames = correct_vignetting(np.stack([frame, reference_frame], axis=0), kernel_size=kernel_size, inplace=True) # correct spatiotemporal brightness variation
+    binary_frame = threshold_array(corrected_frames[0], thresh, dark_objects=True) # convert to binary, objects darker than surroundings
     if mask_plate: # apply a plate mask to exclude edge artifacts
         binary_frame *= create_plate_mask(frame)
     
-    motion_frame = subtract_average(corrected_frames.copy())[0] # create array containing only pixels which changed in value over the course of the recording
+    motion_frame = subtract_average(corrected_frames, inplace=False)[0] # create array containing only pixels which changed in value over the course of the recording
 
     # Look for objects fitting the size requirements in the frame
     filtered_objects, n_objects = filter_objects_by_size(binary_frame, min_size, max_size, return_count=True)
@@ -99,7 +100,7 @@ def create_plate_mask(frame, edge_size=221):
     Returns:
         A 2D Numpy array containing the mask for the plate, with 1s for the plate and 0s for the background.
     """
-    background = np.where(frame > np.max(frame) - 30, 1, 0).astype(np.uint8) # uses bright background to identify plate
+    background = threshold_array(frame, np.max(frame) - 30, dark_objects=False, output_value=1) # uses bright background to identify plate
     kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (edge_size, edge_size))
     plate_mask = 1 - cv2.dilate(background, kernel)
     return plate_mask
@@ -160,10 +161,151 @@ def filter_objects_by_size(binary_frame, min_size, max_size, return_count=False)
     keep_mask[0] = False
     
     # Use the mask to filter the labels and return the binary result
-    filtered_objects = np.where(keep_mask[labels], 255, 0).astype(np.uint8)
+    filtered_objects = threshold_array(keep_mask[labels], 1, dark_objects=False)
 
     if return_count:
         n_objects = np.sum(keep_mask)
         return filtered_objects, n_objects
     else:
         return filtered_objects
+
+def calculate_relative_metrics(position, direction, test_spot):
+    """
+    Calculates polar coordinates and relative angle to a test spot.
+    
+    Args:
+        position: Numpy array of (y, x) coordinates.
+        direction: Numpy array of (dy, dx) normalized direction vector.
+        test_spot: Absolute coordinates (y, x) for the test spot.
+        
+    Returns:
+        r, theta, relative_angle
+    """
+    rel_pos = position - np.array(test_spot)
+    r = np.linalg.norm(rel_pos)
+    theta = np.arctan2(rel_pos[0], rel_pos[1])
+    
+    # Relative angle: 0 faces directly away from test_spot
+    rel_angle = np.arctan2(direction[0], direction[1]) - theta
+    rel_angle = (rel_angle + np.pi) % (2 * np.pi) - np.pi
+    
+    return r, theta, rel_angle
+
+def measure_component(binary_window, component_mask, centroid_yx, time_window):
+    """
+    Measures movement metrics (position, direction, speed) for a single component.
+    
+    Args:
+        binary_window: 3D sub-array for the time window.
+        component_mask: 2D mask for the component in the projection.
+        centroid_yx: (y, x) centroid from the projection.
+        time_window: Number of frames in the window.
+        
+    Returns:
+        Dictionary of metrics or None if insufficient points.
+    """
+    component_points_2d = np.transpose(np.nonzero(component_mask))
+    if len(component_points_2d) < 2:
+        return None
+
+    # Determine direction by fitting a line to the 2D footprint (main axis)
+    position = centroid_yx
+    vx, vy, _, _ = cv2.fitLine(component_points_2d[:, ::-1].astype(np.float32), cv2.DIST_L2, 0, 0.01, 0.01)
+    direction = np.array([float(vy[0]), float(vx[0])]) # (dy, dx)
+
+    # Resolve direction of motion ambiguity using temporal information
+    points_3d = np.transpose(np.nonzero((binary_window > 0) & component_mask))
+    
+    if len(points_3d) > 0:
+        mid_idx = time_window / 2
+        early_pts = points_3d[points_3d[:, 0] < mid_idx]
+        late_pts = points_3d[points_3d[:, 0] >= mid_idx]
+        
+        if len(early_pts) > 0 and len(late_pts) > 0:
+            v_temporal = np.mean(late_pts[:, 1:], axis=0) - np.mean(early_pts[:, 1:], axis=0)
+            if np.dot(direction, v_temporal) < 0:
+                direction = -direction
+
+    # Calculate speed: 2*(trail_radius - worm_radius) / time_window
+    _, trail_radius = cv2.minEnclosingCircle(component_points_2d[:, ::-1].astype(np.float32))
+    points_at_mid = points_3d[points_3d[:, 0] == int(time_window / 2)]
+    if len(points_at_mid) > 0:
+        _, worm_radius = cv2.minEnclosingCircle(points_at_mid[:, 1:][:, ::-1].astype(np.float32))
+    else:
+        worm_radius = trail_radius / 2
+
+    speed = 2 * (trail_radius - worm_radius) / time_window
+
+    return {
+        'y': position[0],
+        'x': position[1],
+        'direction_y': direction[0],
+        'direction_x': direction[1],
+        'speed': speed
+    }
+
+def measure_window(binary_window, time_window, minimum_size=10, maximum_size=1000):
+    """
+    Labels components in a binary window and measures movement for each.
+    
+    Args:
+        binary_window: 3D sub-array for the time window.
+        time_window: Number of frames in the window.
+        minimum_size: Minimum pixel area in projection.
+        maximum_size: Maximum pixel area in projection.
+        
+    Returns:
+        List of dictionaries containing movement metrics for each component.
+    """
+    projected = np.max(binary_window, axis=0)
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(projected.astype(np.uint8), connectivity=8)
+    
+    window_data = []
+    for label_id in range(1, num_labels):
+        if minimum_size < stats[label_id, cv2.CC_STAT_AREA] < maximum_size:
+            comp_mask = (labels == label_id)
+            centroid_yx = centroids[label_id][::-1]
+            metrics = measure_component(binary_window, comp_mask, centroid_yx, time_window)
+            if metrics:
+                metrics['label_id'] = label_id
+                window_data.append(metrics)
+    return window_data
+
+def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None):
+    """
+    Measures chemotaxis metrics over time windows using a 2D projection approach.
+    
+    Args:
+        binary_array: 3D Numpy array (time, y, x) of 8-bit unsigned integers (binary).
+        time_window: Number of frames in each window to analyze.
+        interval: Frame interval between the start of consecutive time windows.
+        minimum_size: Minimum area (pixels) in projected 2D to consider a worm trail.
+        maximum_size: Maximum area (pixels) in projected 2D to consider a worm trail.
+        test_spot: Absolute coordinates (y, x) for the test spot.
+        
+    Returns:
+        A pandas DataFrame containing metrics for each detected worm trail.
+    """
+    worm_data = []
+    
+    # Iterate for consecutive time windows
+    for t in range(0, binary_array.shape[0] - time_window + 1, interval):
+        print(f'{t}/{binary_array.shape[0]}', end="\r")
+        
+        window_metrics = measure_window(binary_array[t:t+time_window], time_window, minimum_size, maximum_size)
+        
+        for m in window_metrics:
+            m['time'] = t
+            # Calculate chemotaxis-specific metrics
+            pos = np.array([m['y'], m['x']])
+            direction = np.array([m['direction_y'], m['direction_x']])
+            
+            if test_spot is not None:
+                r, theta, rel_angle = calculate_relative_metrics(pos, direction, test_spot)
+                m['r'] = r
+                m['theta'] = theta
+                m['relative_angle'] = rel_angle
+            
+            worm_data.append(m)
+
+    return pd.DataFrame(worm_data)

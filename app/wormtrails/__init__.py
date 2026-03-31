@@ -17,7 +17,8 @@ from .src.processing import (
     create_time_encoded_array,
     create_time_encoded_frame,
     add_timestamp, 
-    normalize_array
+    normalize_array,
+    threshold_array
 )
 
 from .src.quantitative import (
@@ -25,7 +26,11 @@ from .src.quantitative import (
     count_frame,
     create_plate_mask,
     validate_objects,
-    filter_objects_by_size
+    filter_objects_by_size,
+    measure_chemotaxis,
+    calculate_relative_metrics,
+    measure_component,
+    measure_window
 )
 
 from .src.colormaps import (

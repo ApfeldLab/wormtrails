@@ -1,3 +1,8 @@
+__pycache__/
 build/
 .ipynb_checkpoints/
 *.egg-info/
+testing/
+*.png
+*.mp4
+*.csv
