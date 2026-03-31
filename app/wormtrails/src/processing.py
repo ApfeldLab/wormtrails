@@ -143,8 +143,7 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
     Returns:
         time_encoded_frame: 3D Numpy array of 8 bit unsigned integers containing the time encoded frame with trails with color channel as axis 3 (last axis).
     """
-    mono_array = average_subtracted_array[start_time:start_time+window,:,:] # take just the frames within the window to be projected down along the time axis
-    colormapped_array = []
+    time_encoded_frame = None
 
     # loop through the window and create colormapped frames
     for t in range(window):
@@ -153,15 +152,19 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
             tmap = 255 - tmap
 
         # set the color of each pixel based on the colormap and the brightness based on the corresponding average subtracted frame
-        colormapped_frame = np.clip(cv2.merge([tmap[0]*mono_array[t]/255, tmap[1]*mono_array[t]/255, tmap[2]*mono_array[t]/255])*scale_factor + offset, 0, 255).astype(np.uint8)
+        colormapped_frame = np.clip(cv2.merge([tmap[0]*average_subtracted_array[start_time+t]/255, tmap[1]*average_subtracted_array[start_time+t]/255, tmap[2]*average_subtracted_array[start_time+t]/255])*scale_factor + offset, 0, 255).astype(np.uint8)
         if light_background: # invert the colormapped frame if a light background is desired
             colormapped_frame = 255 - colormapped_frame
-        colormapped_array.append(colormapped_frame)
 
-    if light_background:
-        return np.min(colormapped_array, axis=0) # minimum pixel value is used for projections if we want dark tracks on a light background
-    else:
-        return np.max(colormapped_array, axis=0) # maximum pixel value is used for projections if we want light tracks on a dark background
+        # initialize or update the time encoded frame
+        if time_encoded_frame is None:
+            time_encoded_frame = colormapped_frame
+        elif light_background:
+            time_encoded_frame = np.min([time_encoded_frame, colormapped_frame], axis=0) # minimum pixel value is used for projections if we want dark tracks on a light background
+        else:
+            time_encoded_frame = np.max([time_encoded_frame, colormapped_frame], axis=0) # maximum pixel value is used for projections if we want light tracks on a dark background
+
+    return time_encoded_frame
 
 def add_timestamp(video_array, black_background = True, font_scale=1, font_thickness=1, seconds_per_frame=1):
     """
