@@ -56,9 +56,9 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=False, inplace=F
     if not inplace:
         return array
 
-def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_difference=True, inplace=False):
+def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_difference=True, use_projection=False, light_background=True, inplace=False):
     """
-    Subtracts the average frame from each frame in the video array.
+    Subtracts the average frame or min/max projected frame from each frame in the video array.
     This effectively only shows pixels which change in value over the course of the recording.
     A range of frames can be specified to calculate the average frame, and an absolute difference can be used instead of clipped subtraction.
     An ideal averaging range contains no stationary worms, as these will appear in negative space after subtraction.
@@ -68,6 +68,8 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
         average_start: Integer value for the start index of the frame range used to calculate the average frame.
         average_end: Integer value for the end index of the frame range used to calculate the average frame.
         use_absolute_difference: Boolean value for whether to use absolute difference or not.
+        use_projection: Boolean value for whether to use a min/max projection. A max projection is used if light_background=True and vice versa.
+        light_background: Boolean value for whether the video is of dark worms on a light background (True) or the opposite (False).
         inplace: Boolean value. If True, modifies the original array and returns it. If False (default), creates a copy.
 
     Returns:
@@ -76,11 +78,16 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
     if not inplace:
         video_array = video_array.copy()
 
-    if average_start == 0 and average_end == -1:
-        average_frame = np.mean(video_array, axis=0)
-    else:
+    if average_end == -1:
+        average_end = video_array.shape[0]
+    
+    if not use_projection:
         average_frame = np.mean(video_array[average_start:average_end,:,:], axis=0)
-
+    elif light_background:
+        average_frame = np.max(video_array[average_start:average_end,:,:], axis=0)
+    else:
+        average_frame = np.min(video_array[average_start:average_end,:,:], axis=0)
+    
     target_brightness = np.mean(average_frame)
 
     # loop through each frame to correct and subtract the average frame, leaving only motion visible
@@ -96,6 +103,8 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
         # perform subtraction
         if use_absolute_difference:
             video_array[i] = np.abs(scaled_frame - average_frame).astype(np.uint8)
+        elif light_background:
+            video_array[i] = np.clip(average_frame - scaled_frame, 0, None).astype(np.uint8)
         else:
             video_array[i] = np.clip(scaled_frame - average_frame, 0, None).astype(np.uint8)
 

@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from .processing import correct_vignetting, subtract_average, threshold_array
 
-def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thresh=3, kernel_size=11, detailed_output=False, mask_plate=False):
+def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thresh=3, kernel_size=11, detailed_output=False, mask_plate=False, plate_edge_size=110):
     """
     Counts the number of living worms in a video array.
     Currently, bright field illumination and a bright background are assumed.
@@ -18,6 +18,7 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction
         detailed_output: Boolean value on whether to only return the count if False, or to also include visualizations of the detected worms
         mask_plate: Boolean value on whether to mask the plate out from the background
+        plate_edge_size: Odd integer value for the width in pixels of the edge of the plate to be excluded.
     
     Returns:
         If detailed_output is False:
@@ -25,8 +26,8 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
         If detailed_output is True:
             A tuple containing the number of worms, a mask of detected living worms, and an image of the plate with living worms highlighted.
     """
-    corrected_video_array = correct_vignetting(video_array, kernel_size=kernel_size, inplace=False) # correct spatiotemporal brightness variation
-    plate_mask = create_plate_mask(video_array[0])
+    corrected_video_array = correct_vignetting(video_array, kernel_size=kernel_size, use_median_blur=True, inplace=False) # correct spatiotemporal brightness variation
+    plate_mask = create_plate_mask(video_array[0], edge_size=plate_edge_size)
 
     if thresh is None: # use Otsu's threshold if none is given
         # Otsu's threshold is calculated on the first frame after masking out the background and plate edges
@@ -37,7 +38,7 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
     if mask_plate: # apply a plate mask to exclude edge artifacts
         binary_array[:,plate_mask==0] = 0
     
-    motion_array = subtract_average(corrected_video_array, inplace=False) # create array containing only pixels which changed in value over the course of the recording
+    motion_array = subtract_average(corrected_video_array, use_projection=True, light_background=True, inplace=False) # create array containing only pixels which changed in value over the course of the recording
 
     # Look for objects fitting the size requirements in each frame
     highest_count = 0
@@ -61,7 +62,7 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
     else:
         return n_moving
 
-def create_plate_mask(frame, edge_size=221, otsu_offset=0, light_background=True):
+def create_plate_mask(frame, edge_size=110, otsu_offset=0, kernel_size=None, light_background=True):
     """
     Creates a mask for the plate from a raw (uncorrected) still frame.
     Performs vignetting correction and uses a modified Otsu threshold to identify the background.
@@ -69,27 +70,40 @@ def create_plate_mask(frame, edge_size=221, otsu_offset=0, light_background=True
     
     Args:
         frame: 2D Numpy array containing a single raw (uncorrected) video frame.
-        edge_size: Odd integer value for the size of the kernel used to create and dilate the mask.
+        edge_size: Integer value for the size of the edge of the plate to be excluded.
         otsu_offset: Integer value to offset the Otsu threshold.
+        kernel_size: Odd integer value for the width of the kernel used to correct vignetting.
         light_background: Boolean value for whether the background is light or dark.
     
     Returns:
         A 2D Numpy array containing the mask for the plate, with 1s for the plate and 0s for the background.
     """
+
     # Perform vignetting correction prior to thresholding
-    corrected_frame = correct_vignetting(frame, kernel_size=edge_size, inplace=False)
+    if kernel_size is None:
+        kernel_size = edge_size*2 + 1
+    corrected_frame = correct_vignetting(frame, kernel_size=kernel_size, inplace=False)
 
     # Identifies the background using a modified Otsu threshold
     otsu_thresh, _ = cv2.threshold(corrected_frame, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     background = threshold_array(corrected_frame, otsu_thresh + otsu_offset, dark_objects=not light_background, output_value=1)
     
-    # Force background to be the largest detected connected component
+    # Force background to be the largest detected connected component which does not contain the center
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(background, connectivity=8)
     if num_labels > 1:
-        largest_label = 1 + np.argmax(stats[1:, cv2.CC_STAT_AREA])
+        # Get the center coordinates and its label
+        height, width = background.shape
+        center_label = labels[height // 2, width // 2]
+        
+        areas = stats[:, cv2.CC_STAT_AREA]
+        areas[0] = 0 # don't include the background label
+        if center_label > 0:
+            areas[center_label] = 0
+
+        largest_label = np.argmax(areas)
         background = (labels == largest_label).astype(np.uint8)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (edge_size, edge_size))
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (edge_size*2 + 1, edge_size*2 + 1))
     plate_mask = 1 - cv2.dilate(background, kernel)
     return plate_mask
 
