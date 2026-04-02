@@ -23,7 +23,6 @@ from .src.processing import (
 
 from .src.quantitative import (
     count_video,
-    count_frame,
     create_plate_mask,
     validate_objects,
     filter_objects_by_size,

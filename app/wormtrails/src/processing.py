@@ -2,44 +2,58 @@ import cv2
 import numpy as np
 import math
 
-def correct_vignetting(video_array, kernel_size=None, inplace=False):
+def correct_vignetting(video_array, kernel_size=None, use_median_blur=False, inplace=False):
     """
     Corrects vignetting in a video array by normalizing each frame to have the same brightness as the average frame and dividing by a blur of the average frame.
+    If a single frame (2D array) is provided, the frame brightness adjustment step is skipped.
     This step can be skipped if initial scan is evenly lit and the lens used does not vignette.
     Kernel size must be odd and smaller values will make smaller brightness variations get evened out.
 
     Args:
-        video_array: 3D Numpy array containing the video frames, with time as axis 0.
+        video_array: 2D or 3D Numpy array containing the video frames. If 3D, time is axis 0.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame. If None, the kernel size will be calculated as one quarter the image width.
         inplace: Boolean value. If True, modifies the original array and returns it. If False (default), creates a copy.
+        use_median_blur: Boolean value. If True, uses median blur instead of Gaussian blur for the vignetting correction.
 
     Returns:
-        video_array: 3D Numpy array of 8 bit unsigned integers containing the corrected video frames, with time as axis 0.
+        video_array: 2D or 3D Numpy array of 8 bit unsigned integers containing the corrected video frames.
     """
     if not inplace:
         video_array = video_array.copy()
 
-    average_frame = np.mean(video_array, axis=0)
+    # Handle 2D and 3D arrays by wrapping 2D in a new axis for unified processing
+    is_single_frame = video_array.ndim == 2
+    if is_single_frame:
+        video_array_3d = video_array[np.newaxis, ...]
+    else:
+        video_array_3d = video_array
+
+    average_frame = np.mean(video_array_3d, axis=0)
     if kernel_size is None:
         kernel_size = int(average_frame.shape[0]/8) * 2 + 1 # Kernel size is one quarter the image width
-    blur_frame = cv2.GaussianBlur(average_frame, (kernel_size,kernel_size), 0)
+    if use_median_blur:
+        blur_frame = cv2.medianBlur(average_frame.astype(np.uint8), kernel_size)
+    else:
+        blur_frame = cv2.GaussianBlur(average_frame, (kernel_size,kernel_size), 0)
     target_brightness = np.mean(average_frame)
 
     # loop through and correct each frame
-    for i in range(video_array.shape[0]):
-        frame = video_array[i].astype(np.float32)
-        frame_brightness = np.mean(frame)
-
-        if frame_brightness != 0:
-            scaled_frame = frame * (target_brightness / frame_brightness) # scale each frame to have the same brightness as the average frame
+    for i in range(video_array_3d.shape[0]):
+        frame = video_array_3d[i].astype(np.float32)
+        
+        if not is_single_frame:
+            frame_brightness = np.mean(frame)
+            if frame_brightness != 0:
+                scaled_frame = frame * (target_brightness / frame_brightness) # scale each frame to have the same brightness as the average frame
+            else:
+                scaled_frame = frame  # Avoid division by zero
         else:
-            scaled_frame = frame  # Avoid division by zero
+            scaled_frame = frame # Skip frame brightness adjustment for single frames
 
         # divide each frame by the blur of the average frame to correct vignetting or other large scale brightness variations
-        video_array[i] = (scaled_frame * target_brightness / blur_frame).astype(np.uint8)
+        video_array_3d[i] = (scaled_frame * target_brightness / blur_frame).astype(np.uint8)
 
-    if not inplace:
-        return video_array
+    return video_array
 
 def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_difference=True, inplace=False):
     """

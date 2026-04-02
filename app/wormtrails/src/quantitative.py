@@ -3,9 +3,10 @@ import numpy as np
 import pandas as pd
 from .processing import correct_vignetting, subtract_average, threshold_array
 
-def count_video(video_array, min_size=10, max_size=300, thresh=170, motion_thresh=1, kernel_size=11, detailed_output=False, mask_plate=False):
+def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thresh=3, kernel_size=11, detailed_output=False, mask_plate=False):
     """
     Counts the number of living worms in a video array.
+    Currently, bright field illumination and a bright background are assumed.
     Recordings of 30 seconds to 1 minute are recommended.
     
     Args:
@@ -25,9 +26,16 @@ def count_video(video_array, min_size=10, max_size=300, thresh=170, motion_thres
             A tuple containing the number of worms, a mask of detected living worms, and an image of the plate with living worms highlighted.
     """
     corrected_video_array = correct_vignetting(video_array, kernel_size=kernel_size, inplace=False) # correct spatiotemporal brightness variation
+    plate_mask = create_plate_mask(video_array[0])
+
+    if thresh is None: # use Otsu's threshold if none is given
+        # Otsu's threshold is calculated on the first frame after masking out the background and plate edges
+        thresh, _ = cv2.threshold((corrected_video_array[0][plate_mask > 0]).reshape(1, -1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        thresh -= 2 # subtract 2 from the threshold to account for dominant read noise
+    
     binary_array = threshold_array(corrected_video_array, thresh, dark_objects=True) # convert to binary, objects darker than surroundings
     if mask_plate: # apply a plate mask to exclude edge artifacts
-        binary_array = (binary_array * create_plate_mask(video_array[0])).astype(np.uint8)
+        binary_array[:,plate_mask==0] = 0
     
     motion_array = subtract_average(corrected_video_array, inplace=False) # create array containing only pixels which changed in value over the course of the recording
 
@@ -53,46 +61,7 @@ def count_video(video_array, min_size=10, max_size=300, thresh=170, motion_thres
     else:
         return n_moving
 
-def count_frame(frame, reference_frame, min_size=10, max_size=300, thresh=170, motion_thresh=1, kernel_size=11, detailed_output=False, mask_plate=False):
-    """
-    Counts the number of living worms in a frame.
-    
-    Args:
-        frame: 2D Numpy array containing the frame to be counted
-        reference_frame: 2D Numpy array containing the reference frame
-        min_size: Integer value for the minimum size of a potential worm in pixel area
-        max_size: Integer value for the maximum size of a potential worm in pixel area
-        thresh: Integer value for the threshold for converting the frame to a binary array
-        motion_thresh: Integer value for the threshold for motion detection
-        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction
-        detailed_output: Boolean value on whether to only return the count if False, or to also include visualizations of the detected worms
-        mask_plate: Boolean value on whether to mask the plate out from the background
-    
-    Returns:
-        If detailed_output is False:
-            An integer value for the number of worms.
-        If detailed_output is True:
-            A tuple containing the number of worms, the binary array, and the corrected array.
-    """
-    corrected_frames = correct_vignetting(np.stack([frame, reference_frame], axis=0), kernel_size=kernel_size, inplace=True) # correct spatiotemporal brightness variation
-    binary_frame = threshold_array(corrected_frames[0], thresh, dark_objects=True) # convert to binary, objects darker than surroundings
-    if mask_plate: # apply a plate mask to exclude edge artifacts
-        binary_frame *= create_plate_mask(frame)
-    
-    motion_frame = subtract_average(corrected_frames, inplace=False)[0] # create array containing only pixels which changed in value over the course of the recording
-
-    # Look for objects fitting the size requirements in the frame
-    filtered_objects, n_objects = filter_objects_by_size(binary_frame, min_size, max_size, return_count=True)
-
-    # Use the presence of motion to validate the objects fitting the size requirements
-    validated_objects, n_moving = validate_objects(filtered_objects, motion_frame, validation_thresh=motion_thresh, return_count=True)
-
-    if detailed_output:
-        return n_moving, validated_objects, np.max([corrected_frames[0], validated_objects], axis=0)
-    else:
-        return n_moving
-
-def create_plate_mask(frame, edge_size=221, otsu_offset=0):
+def create_plate_mask(frame, edge_size=221, otsu_offset=0, light_background=True):
     """
     Creates a mask for the plate from a raw (uncorrected) still frame.
     Performs vignetting correction and uses a modified Otsu threshold to identify the background.
@@ -100,18 +69,19 @@ def create_plate_mask(frame, edge_size=221, otsu_offset=0):
     
     Args:
         frame: 2D Numpy array containing a single raw (uncorrected) video frame.
-        edge_size: Odd integer value for the size of the kernel used to create the mask.
+        edge_size: Odd integer value for the size of the kernel used to create and dilate the mask.
         otsu_offset: Integer value to offset the Otsu threshold.
+        light_background: Boolean value for whether the background is light or dark.
     
     Returns:
         A 2D Numpy array containing the mask for the plate, with 1s for the plate and 0s for the background.
     """
     # Perform vignetting correction prior to thresholding
-    corrected_frame = correct_vignetting(frame[np.newaxis, :, :], kernel_size=edge_size, inplace=False)[0]
+    corrected_frame = correct_vignetting(frame, kernel_size=edge_size, inplace=False)
 
     # Identifies the background using a modified Otsu threshold
     otsu_thresh, _ = cv2.threshold(corrected_frame, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    background = threshold_array(corrected_frame, otsu_thresh + otsu_offset, dark_objects=False, output_value=1)
+    background = threshold_array(corrected_frame, otsu_thresh + otsu_offset, dark_objects=not light_background, output_value=1)
     
     # Force background to be the largest detected connected component
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(background, connectivity=8)
@@ -144,7 +114,7 @@ def validate_objects(binary_frame, validation_frame, validation_thresh=1, return
     n_valid = 0
     for i in range(1, num_labels):
         mask = (labels == i)
-        if validation_frame[mask].mean() > validation_thresh:
+        if validation_frame[mask].max() > validation_thresh:
             valid_objects[mask] = 255
             n_valid += 1
 
