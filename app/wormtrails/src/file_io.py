@@ -4,13 +4,16 @@ import numpy as np
 def read_video_file(video_path):
     """
     Reads a video file and returns a 3D Numpy array containing the video frames, with time as axis 0.
-    Only monochrome videos are supported, and color videos are converted to greyscale.
+    Only monochrome videos are supported, and color videos are automatically converted to greyscale.
 
     Args:
         video_path: String path to the video file.
 
     Returns:
-        video_array: 3D Numpy array of 8 bit unsigned integers containing the video frames, with time as axis 0.
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
+
+    Raises:
+        ValueError: If the video file cannot be opened or read.
     """
     
     cap = cv2.VideoCapture(video_path)
@@ -38,11 +41,14 @@ def read_video_file(video_path):
 def write_mp4(video_array, out_path, fps=60):
     """
     Writes a 3D Numpy array containing video frames to an MP4 file.
-
+    
     Args:
-        video_array: 3D Numpy array containing the video frames, with time as axis 0.
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
         out_path: String path to the output MP4 file.
         fps: Integer value for the frames per second to write the video at. Default is 60.
+
+    Prints:
+        Confirmation message when video writing completes.
     """
     
     num_frames = video_array.shape[0]
@@ -72,12 +78,15 @@ def write_mp4(video_array, out_path, fps=60):
 
 def write_avi(video_array, out_path, fps=60):
     """
-    Writes a 3D Numpy array containing video frames to an AVI file.
+    Writes a 3D Numpy array containing video frames to an AVI file using FFV1 codec for lossless compression.
 
     Args:
-        video_array: 3D Numpy array containing the video frames, with time as axis 0.
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
         out_path: String path to the output AVI file.
         fps: Integer value for the frames per second to write the video at. Default is 60.
+
+    Prints:
+        Confirmation message when video writing completes.
     """
     
     num_frames = video_array.shape[0]

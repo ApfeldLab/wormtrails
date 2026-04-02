@@ -5,26 +5,37 @@ from .processing import correct_vignetting, subtract_average, threshold_array
 
 def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thresh=3, kernel_size=11, detailed_output=False, mask_plate=False, plate_edge_size=110):
     """
-    Counts the number of living worms in a video array.
-    Currently, bright field illumination and a bright background are assumed.
-    Recordings of 30 seconds to 1 minute are recommended.
+    Counts the number of living worms in a video array using motion detection and size filtering.
+    Currently optimized for bright field illumination with a bright background.
+    Recordings of 30 seconds to 1 minute are recommended for reliable results.
     
     Args:
-        video_array: 3D Numpy array containing the video frames, with time as axis 0
-        min_size: Integer value for the minimum size of a potential worm in pixel area
-        max_size: Integer value for the maximum size of a potential worm in pixel area
-        thresh: Integer value for the threshold for converting the video array to a binary array
-        motion_thresh: Integer value for the threshold for motion detection
-        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction
-        detailed_output: Boolean value on whether to only return the count if False, or to also include visualizations of the detected worms
-        mask_plate: Boolean value on whether to mask the plate out from the background
-        plate_edge_size: Odd integer value for the width in pixels of the edge of the plate to be excluded.
-    
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
+        min_size: Integer value for the minimum size (pixel area) of a potential worm. Default is 10.
+        max_size: Integer value for the maximum size (pixel area) of a potential worm. Default is 300.
+        thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), Otsu's threshold is calculated on masked frames.
+        motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is 3.
+        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
+        detailed_output: Boolean value. If False (default), returns only the count. If True, returns a tuple with count, mask, and visualization.
+        mask_plate: Boolean value. If True, masks out the plate edges to exclude edge artifacts. Default is False.
+        plate_edge_size: Integer value for the width in pixels of the plate edge to be excluded when mask_plate=True. Default is 110.
+
     Returns:
         If detailed_output is False:
-            An integer value for the number of worms.
-        If detailed_output is True:
-            A tuple containing the number of worms, a mask of detected living worms, and an image of the plate with living worms highlighted.
+            An integer value for the number of living worms detected.
+        If detailed_output is True (default):
+            A tuple containing (n_moving, validated_objects, visualization) where:
+                - n_moving: Integer count of validated living worms
+                - validated_objects: 2D Numpy array mask of detected living worms
+                - visualization: Image of the plate with living worms highlighted
+
+    Raises:
+        ValueError: If the video array cannot be processed or thresholds fail.
+
+    Notes:
+        - Uses vignetting correction with kernel-based blur
+        - Applies plate masking when enabled to avoid edge artifacts
+        - Validates objects by requiring motion detection in each object's pixels
     """
     corrected_video_array = correct_vignetting(video_array, kernel_size=kernel_size, use_median_blur=True, inplace=False) # correct spatiotemporal brightness variation
     plate_mask = create_plate_mask(video_array[0], edge_size=plate_edge_size)
@@ -66,17 +77,22 @@ def create_plate_mask(frame, edge_size=110, otsu_offset=0, kernel_size=None, lig
     """
     Creates a mask for the plate from a raw (uncorrected) still frame.
     Performs vignetting correction and uses a modified Otsu threshold to identify the background.
-    A circular kernel of diameter edge_size is used to expand the background mask to cover the edges of the plate. 
+    A circular kernel of diameter edge_size is used to expand the background mask to cover the edges of the plate.
     
     Args:
-        frame: 2D Numpy array containing a single raw (uncorrected) video frame.
-        edge_size: Integer value for the size of the edge of the plate to be excluded.
-        otsu_offset: Integer value to offset the Otsu threshold.
-        kernel_size: Odd integer value for the width of the kernel used to correct vignetting.
-        light_background: Boolean value for whether the background is light or dark.
-    
+        frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing a single raw (uncorrected) video frame.
+        edge_size: Integer value for the size of the edge of the plate to be excluded in pixels. Default is 110.
+        otsu_offset: Integer value to offset the Otsu threshold. Useful for adjusting background detection sensitivity. Default is 0.
+        kernel_size: Odd integer value for the width of the kernel used to correct vignetting. If None, calculated from edge_size as edge_size*2 + 1.
+        light_background: Boolean value. If True, assumes dark objects on light background. If False, assumes bright objects on dark background.
+
     Returns:
-        A 2D Numpy array containing the mask for the plate, with 1s for the plate and 0s for the background.
+        A 2D Numpy array of 8 bit unsigned integers (uint8) containing the mask for the plate, with 1 for the plate region and 0 for the background.
+
+    Notes:
+        - Vignetting correction is applied before thresholding for accurate masking
+        - The largest connected component not containing the image center is selected as the background
+        - A dilated circular kernel is used to exclude the plate edge region
     """
 
     # Perform vignetting correction prior to thresholding
@@ -109,21 +125,29 @@ def create_plate_mask(frame, edge_size=110, otsu_offset=0, kernel_size=None, lig
 
 def validate_objects(binary_frame, validation_frame, validation_thresh=1, return_count=False):
     """
-    Validates identified objects, given by a binary frame, by requiring that each object surpasses an average threshold value in the validation frame.
+    Validates identified objects in a binary frame by requiring that each object contains at least one pixel which surpasses a threshold in the validation frame.
+    Connected components in the binary frame are tested against the validation frame.
     
     Args:
-        binary_frame: 2D Numpy array containing the binary video frames, with time as axis 0.
-        validation_frame: 2D Numpy array containing the validation video frames, with time as axis 0.
-        validation_thresh: Integer value for the threshold for validation.
-    
+        binary_frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing the binary frame with potential objects (0 and 255).
+        validation_frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing the validation frame to use to decide whether objects are valid.
+        validation_thresh: Integer value for the minimum pixel value in the validation frame required to validate an object. Default is 1.
+        return_count: Boolean value. If True, returns a tuple of (validated_objects, n_valid). If False, returns only the validated objects.
+
     Returns:
-        A binary 2D Numpy array containing only validated objects.
-        If return_count is True, returns a tuple of the aformentioned binary array and the count of objects.
+        If return_count is False:
+            A binary 2D Numpy array of 8 bit unsigned integers containing only validated objects.
+        If return_count is True:
+            A tuple of (validated_objects, n_valid) where n_valid is the integer count of validated objects.
+
+    Notes:
+        - Each connected component is validated if any pixel in the validation frame exceeds validation_thresh
+        - Objects without sufficient motion in the validation frame are removed
     """
     # Find connected components and their statistics
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary_frame, connectivity=8)
 
-    # Count a potential object as a valid moving object if the motion frame shows movement in the object pixels
+    # Count a potential object as a valid moving object if the validation frame surpasses the validation threshold in any of the object pixels
     valid_objects = np.zeros_like(binary_frame)
     n_valid = 0
     for i in range(1, num_labels):
@@ -140,16 +164,23 @@ def validate_objects(binary_frame, validation_frame, validation_thresh=1, return
 def filter_objects_by_size(binary_frame, min_size, max_size, return_count=False):
     """
     Removes objects from a binary image that do not fall within the specified size range.
+    Connected components are filtered based on their pixel area.
     
     Args:
-        binary_frame: 2D Numpy array containing the binary video frame. This should be 8-bit unsigned integers, with only 0 and 255 pixel values.
-        min_size: Minimum pixel area for an object to be kept.
-        max_size: Maximum pixel area for an object to be kept.
-        return_count: Boolean value indicating whether to return the count of objects.
-    
+        binary_frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing the binary frame. Should contain only 0 and 255 pixel values.
+        min_size: Minimum pixel area for an object to be kept. Objects smaller than this are removed.
+        max_size: Maximum pixel area for an object to be kept. Objects larger than this are removed.
+        return_count: Boolean value. If True, returns a tuple of (filtered_objects, n_objects). If False, returns only the filtered objects.
+
     Returns:
-        A binary 2D Numpy array containing only the objects within the specified size range.
-        If return_count is True, returns a tuple of the aformentioned binary array and the count of objects.
+        If return_count is False:
+            A binary 2D Numpy array of 8 bit unsigned integers containing only objects within the specified size range.
+        If return_count is True:
+            A tuple of (filtered_objects, n_objects) where n_objects is the integer count of objects kept.
+
+    Notes:
+        - The background (label 0) is always excluded from the size filtering
+        - Objects must have area between min_size and max_size (inclusive) to be retained
     """
     # Find connected components and their statistics
     num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary_frame, connectivity=8)
@@ -173,15 +204,21 @@ def filter_objects_by_size(binary_frame, min_size, max_size, return_count=False)
 
 def calculate_relative_metrics(position, direction, test_spot):
     """
-    Calculates polar coordinates and relative angle to a test spot.
+    Calculates polar coordinates and relative angle to a test spot for chemotaxis analysis.
     
     Args:
-        position: Numpy array of (y, x) coordinates.
-        direction: Numpy array of (dy, dx) normalized direction vector.
-        test_spot: Absolute coordinates (y, x) for the test spot.
+        position: Numpy array of shape (2,) containing (y, x) coordinates of the object.
+        direction: Numpy array of shape (2,) containing (dy, dx) normalized direction vector.
+        test_spot: Numpy array or tuple of (y, x) absolute coordinates for the test spot or bait location.
         
     Returns:
-        r, theta, relative_angle
+        r: Radial distance from test_spot to position (scalar)
+        theta: Absolute angle in radians from -pi to pi
+        relative_angle: Relative angle in radians from -pi to pi, where 0 faces directly away from test_spot.
+        
+    Notes:
+        - Uses polar coordinate transformation for chemotaxis metric calculation
+        - Relative angle is computed as the difference between direction vector and position vector to test_spot
     """
     rel_pos = position - np.array(test_spot)
     r = np.linalg.norm(rel_pos)
@@ -195,16 +232,22 @@ def calculate_relative_metrics(position, direction, test_spot):
 
 def measure_component(binary_window, component_mask, centroid_yx, time_window):
     """
-    Measures movement metrics (position, direction, speed) for a single component.
+    Measures movement metrics (position, direction, speed) for a single component in a time window.
     
     Args:
-        binary_window: 3D sub-array for the time window.
-        component_mask: 2D mask for the component in the projection.
-        centroid_yx: (y, x) centroid from the projection.
-        time_window: Number of frames in the window.
+        binary_window: 3D Numpy array of 8 bit unsigned integers (uint8) for the time window, shape (time, height, width).
+        component_mask: 2D mask (0 and 255) for the component in the projection.
+        centroid_yx: Numpy array of shape (2,) containing (y, x) centroid from the projection.
+        time_window: Number of frames in the window used for speed calculation.
         
     Returns:
-        Dictionary of metrics or None if insufficient points.
+        Dictionary with movement metrics for the component, or None if insufficient points to calculate metrics.
+        Dictionary keys: 'y', 'x', 'direction_y', 'direction_x', 'speed'
+        
+    Notes:
+        - Direction is determined by fitting a line to the 2D footprint (main axis)
+        - Direction is resolved using temporal information to remove motion ambiguity
+        - Speed is calculated as 2*(trail_radius - worm_radius) / time_window
     """
     component_points_2d = np.transpose(np.nonzero(component_mask))
     if len(component_points_2d) < 2:
@@ -248,16 +291,22 @@ def measure_component(binary_window, component_mask, centroid_yx, time_window):
 
 def measure_window(binary_window, time_window, minimum_size=10, maximum_size=1000):
     """
-    Labels components in a binary window and measures movement for each.
+    Labels connected components in a binary time window and measures movement for each.
     
     Args:
-        binary_window: 3D sub-array for the time window.
-        time_window: Number of frames in the window.
-        minimum_size: Minimum pixel area in projection.
-        maximum_size: Maximum pixel area in projection.
+        binary_window: 3D Numpy array of 8 bit unsigned integers (uint8) for the time window, shape (time, height, width).
+        time_window: Number of frames in the window used for analysis.
+        minimum_size: Minimum pixel area in 2D projection for a component to be considered. Default is 10.
+        maximum_size: Maximum pixel area in 2D projection for a component to be considered. Default is 1000.
         
     Returns:
-        List of dictionaries containing movement metrics for each component.
+        List of dictionaries containing movement metrics for each detected component.
+        Each dictionary contains: 'y', 'x', 'direction_y', 'direction_x', 'speed', 'label_id', 'time'
+        
+    Notes:
+        - Components are identified using connected components analysis on max projection
+        - Components outside the size range are filtered out
+        - Only components with sufficient data points are included in results
     """
     projected = np.max(binary_window, axis=0)
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(projected.astype(np.uint8), connectivity=8)
@@ -276,17 +325,31 @@ def measure_window(binary_window, time_window, minimum_size=10, maximum_size=100
 def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None):
     """
     Measures chemotaxis metrics over time windows using a 2D projection approach.
+    Analyzes binary video data to compute position, direction, speed, and relative angle to a test spot.
     
     Args:
-        binary_array: 3D Numpy array (time, y, x) of 8-bit unsigned integers (binary).
-        time_window: Number of frames in each window to analyze.
-        interval: Frame interval between the start of consecutive time windows.
-        minimum_size: Minimum area (pixels) in projected 2D to consider a worm trail.
-        maximum_size: Maximum area (pixels) in projected 2D to consider a worm trail.
-        test_spot: Absolute coordinates (y, x) for the test spot.
+        binary_array: 3D Numpy array of shape (time, height, width) containing 8-bit unsigned integers (0/255 binary).
+        time_window: Number of frames in each sliding window to analyze. Default is 10.
+        interval: Frame interval between the start of consecutive time windows. Default is 60 (1 minute).
+        minimum_size: Minimum area in pixels (2D projection) to consider a component as a valid worm trail. Default is 10.
+        maximum_size: Maximum area in pixels (2D projection) to consider a component as a valid worm trail. Default is 1000.
+        test_spot: Tuple or array of (y, x) absolute coordinates for the test spot or bait location. If None (default), relative angle metrics are not computed.
         
     Returns:
-        A pandas DataFrame containing metrics for each detected worm trail.
+        A pandas DataFrame with one row per detected worm trail, containing columns:
+            - 'y', 'x': Position of the component
+            - 'direction_y', 'direction_x': Direction vector components
+            - 'speed': Calculated speed in the window
+            - 'time': Starting frame index of the time window
+            - 'r': Radial distance to test spot (if test_spot provided)
+            - 'theta': Absolute angle in radians
+            - 'relative_angle': Relative angle to test spot in radians
+            
+        Prints progress indicator during processing.
+
+    Notes:
+        - Uses sliding window approach with specified overlap
+        - Progress is printed to stdout with frame count indicator
     """
     worm_data = []
     

@@ -8,7 +8,14 @@ def show_video_array(video_array):
     Press ESC to exit the window.
 
     Args:
-        video_array: 3D Numpy array containing the video frames, with time as axis 0.
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
+
+    Returns:
+        None. Displays video in an OpenCV window.
+
+    Notes:
+        - Uses OpenCV's imshow and createTrackbar for frame navigation
+        - Press ESC key to close the window and destroy OpenCV objects
     """
     
     num_frames = video_array.shape[0]
@@ -38,7 +45,14 @@ def show_frame(frame):
     Press ESC to exit the window.
 
     Args:
-        frame: 2D Numpy array containing the frame.
+        frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing a single frame.
+
+    Returns:
+        None. Displays frame in an OpenCV window.
+
+    Notes:
+        - Uses OpenCV's imshow for single frame display
+        - Press ESC key to close the window and destroy OpenCV objects
     """
     
     cv2.namedWindow('esc to exit', cv2.WINDOW_NORMAL)
@@ -61,12 +75,12 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
     This implementation supports colormaps to encode time within frames.
     
     Args:
-        average_subtracted_array: 3D Numpy array containing the average subtracted video frames, with time as axis 0.
-        colormap: Numpy array containing the colormap, applied to each trail frame.
-        window: Integer value for the window size used to create trails, shorter windows take less processing time.
-        scale_factor: Float value for the scale factor, higher values effectively increase contrast.
-        offset: Integer value for the offset, positive values brighten the image, negative values darken it and can counteract noise.
-        light_background: Boolean value for the light background.
+        average_subtracted_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the average subtracted video frames, with time as axis 0.
+        colormap: Numpy array of shape (N, 3) containing the colormap colors (R, G, B values 0-255), applied to each trail frame.
+        window: Integer value for the window size (number of frames to look back) used to create trails. Shorter windows take less processing time.
+        scale_factor: Float value for the scaling factor, applied to trails to adjust brightness. Higher values increase contrast.
+        offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise.
+        light_background: Boolean value. If True, assumes dark trails on light background. If False, assumes bright trails on dark background.
     """
     
     num_frames = average_subtracted_array.shape[0]
