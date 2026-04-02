@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from .processing import correct_vignetting, subtract_average, threshold_array
 
-def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thresh=3, kernel_size=11, detailed_output=False, mask_plate=False, plate_edge_size=110):
+def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thresh=None, kernel_size=11, detailed_output=False, mask_plate=False, plate_edge_size=110):
     """
     Counts the number of living worms in a video array using motion detection and size filtering.
     Currently optimized for bright field illumination with a bright background.
@@ -14,7 +14,7 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
         min_size: Integer value for the minimum size (pixel area) of a potential worm. Default is 10.
         max_size: Integer value for the maximum size (pixel area) of a potential worm. Default is 300.
         thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), Otsu's threshold is calculated on masked frames.
-        motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is 3.
+        motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is calculated with Otsu's method.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
         detailed_output: Boolean value. If False (default), returns only the count. If True, returns a tuple with count, mask, and visualization.
         mask_plate: Boolean value. If True, masks out the plate edges to exclude edge artifacts. Default is False.
@@ -59,6 +59,10 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
             highest_count = n_objects
             highest_count_index = i
             highest_count_objects = filtered_objects
+
+    if motion_thresh is None: # use Otsu's threshold if none is given
+        # Otsu's threshold is calculated on the first frame after masking out the background and plate edges
+        motion_thresh, _ = cv2.threshold((np.max(motion_array, axis=0)[plate_mask > 0]).reshape(1, -1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
     if highest_count > 0:
         # Use the presence of motion to validate the objects fitting the size requirements
