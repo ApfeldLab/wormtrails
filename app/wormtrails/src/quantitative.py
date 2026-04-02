@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from .processing import correct_vignetting, subtract_average, threshold_array
 
-def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thresh=None, kernel_size=11, detailed_output=False, mask_plate=False, plate_edge_size=110):
+def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thresh=None, head_motion_range=2,kernel_size=11, detailed_output=False, mask_plate=False, plate_edge_size=110):
     """
     Counts the number of living worms in a video array using motion detection and size filtering.
     Currently optimized for bright field illumination with a bright background.
@@ -15,6 +15,7 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
         max_size: Integer value for the maximum size (pixel area) of a potential worm. Default is 300.
         thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), Otsu's threshold is calculated on masked frames.
         motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is calculated with Otsu's method.
+        head_motion_range: Integer value for the radius in pixels of the circular kernel used to expand the detected objects to include the head of the worm. Default is 2.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
         detailed_output: Boolean value. If False (default), returns only the count. If True, returns a tuple with count, mask, and visualization.
         mask_plate: Boolean value. If True, masks out the plate edges to exclude edge artifacts. Default is False.
@@ -49,7 +50,7 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
     if mask_plate: # apply a plate mask to exclude edge artifacts
         binary_array[:,plate_mask==0] = 0
     
-    motion_array = subtract_average(corrected_video_array, use_projection=True, light_background=True, inplace=False) # create array containing only pixels which changed in value over the course of the recording
+    motion_array = subtract_average(video_array, use_projection=True, light_background=True, inplace=False) # create array containing only pixels which changed in value over the course of the recording
 
     # Look for objects fitting the size requirements in each frame
     highest_count = 0
@@ -66,7 +67,7 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
 
     if highest_count > 0:
         # Use the presence of motion to validate the objects fitting the size requirements
-        validated_objects, n_moving = validate_objects(highest_count_objects, motion_array[highest_count_index], validation_thresh=motion_thresh, return_count=True)
+        validated_objects, n_moving = validate_objects(highest_count_objects, motion_array[highest_count_index], validation_thresh=motion_thresh, expand_objects_radius=head_motion_range, return_count=True)
     else:
         validated_objects = np.zeros_like(binary_array[0])
         n_moving = 0
@@ -127,7 +128,7 @@ def create_plate_mask(frame, edge_size=110, otsu_offset=0, kernel_size=None, lig
     plate_mask = 1 - cv2.dilate(background, kernel)
     return plate_mask
 
-def validate_objects(binary_frame, validation_frame, validation_thresh=1, return_count=False):
+def validate_objects(binary_frame, validation_frame, validation_thresh=1, return_count=False, expand_objects_radius=0):
     """
     Validates identified objects in a binary frame by requiring that each object contains at least one pixel which surpasses a threshold in the validation frame.
     Connected components in the binary frame are tested against the validation frame.
@@ -137,6 +138,7 @@ def validate_objects(binary_frame, validation_frame, validation_thresh=1, return
         validation_frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing the validation frame to use to decide whether objects are valid.
         validation_thresh: Integer value for the minimum pixel value in the validation frame required to validate an object. Default is 1.
         return_count: Boolean value. If True, returns a tuple of (validated_objects, n_valid). If False, returns only the validated objects.
+        expand_objects_radius: Integer value for the radius of the kernel used to expand each object's validation region. Default is 0.
 
     Returns:
         If return_count is False:
@@ -156,8 +158,13 @@ def validate_objects(binary_frame, validation_frame, validation_thresh=1, return
     n_valid = 0
     for i in range(1, num_labels):
         mask = (labels == i)
-        if validation_frame[mask].max() > validation_thresh:
-            valid_objects[mask] = 255
+        if expand_objects_radius > 0:
+            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (expand_objects_radius*2 + 1, expand_objects_radius*2 + 1))
+            mask_expanded = cv2.dilate(mask.astype(np.uint8), kernel)
+        else:
+            mask_expanded = mask
+        if validation_frame[mask_expanded > 0].max() > validation_thresh:
+            valid_objects[mask > 0] = 255
             n_valid += 1
 
     if return_count:

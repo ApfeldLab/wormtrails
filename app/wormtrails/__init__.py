@@ -39,3 +39,5 @@ from .src.colormaps import (
     banded_blue_to_red,
     dark_separated_blue_to_red
 )
+
+from .gui import main as start_gui
