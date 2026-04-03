@@ -3,7 +3,18 @@ import numpy as np
 import pandas as pd
 from .processing import correct_vignetting, subtract_average, threshold_array
 
-def count_video(video_array, min_size=10, max_size=100, corrected_thresh=203, motion_thresh=3, kernel_size=11, detailed_output=False, plate_edge_size=None, plate_width=None):
+def count_video(
+    video_array, 
+    min_size=10, 
+    max_size=100, 
+    corrected_thresh=203, 
+    motion_thresh=3, 
+    kernel_size=11,  
+    plate_edge_size=None, 
+    plate_width=None,
+    detailed_output=False,
+    inPlace=False
+):
     """
     Counts the number of living worms in a video array using motion detection and size filtering.
     Currently optimized for bright field illumination with a bright background.
@@ -16,8 +27,10 @@ def count_video(video_array, min_size=10, max_size=100, corrected_thresh=203, mo
         corrected_thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), Otsu's threshold is calculated on masked frames.
         motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is calculated with Otsu's method.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
+        plate_edge_size: Integer value for the width in pixels of the plate edge to be excluded when mask_plate=True. Default is 20% the width of plate_width.
+        plate_width: Integer value for the width of the plate in pixels. Default is 80% the width of the frame.
         detailed_output: Boolean value. If False (default), returns only the count. If True, returns a tuple with count, and visualization.
-        plate_edge_size: Integer value for the width in pixels of the plate edge to be excluded when mask_plate=True. Default is 110.
+        inPlace: Boolean value. If True, the video array will be modified in place. If False (default), a copy of the video array will be used.
 
     Returns:
         If detailed_output is False:
@@ -35,6 +48,9 @@ def count_video(video_array, min_size=10, max_size=100, corrected_thresh=203, mo
         - Applies plate masking when enabled to avoid edge artifacts
         - Validates objects by requiring motion detection in each object's pixels
     """
+    if not inPlace:
+        video_array = video_array.copy()
+    
     plate_mask = create_plate_mask(np.mean(video_array, axis=0), edge_size=plate_edge_size, plate_width=plate_width)
 
     motion = np.zeros_like(video_array)
@@ -81,7 +97,7 @@ def count_video(video_array, min_size=10, max_size=100, corrected_thresh=203, mo
     else:
         return count
 
-def create_plate_mask(frame, edge_size=None, plate_width=None,light_background=True):
+def create_plate_mask(frame, edge_size=None, plate_width=None, light_background=True):
     """
     Creates a mask for the plate from a raw (uncorrected) still frame.
     Determines the plate region by fitting circles to objects in a downsampled version of the image.
@@ -89,7 +105,8 @@ def create_plate_mask(frame, edge_size=None, plate_width=None,light_background=T
     
     Args:
         frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing a single raw (uncorrected) video frame.
-        edge_size: Integer value for the size of the edge of the plate to be excluded in pixels. Default is 110.
+        edge_size: Integer value for the size of the edge of the plate to be excluded in pixels. Default is 20% the width of plate_width.
+        plate_width: Integer value for the width of the plate in pixels. Default is 80% the width of the frame.
         light_background: Boolean value. If True, assumes dark objects on light background. If False, assumes bright objects on dark background.
 
     Returns:
