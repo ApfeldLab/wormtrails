@@ -18,20 +18,20 @@ class TestQuantitative(unittest.TestCase):
 
     def test_count_video(self):
         # We test with detailed_output=False
-        count = count_video(self.video, min_size=5, max_size=500, detailed_output=False, mask_plate=False)
+        count = count_video(self.video, min_size=5, max_size=500, detailed_output=False)
         self.assertTrue(isinstance(count, int))
         self.assertGreaterEqual(count, 0)
 
     def test_count_young_adults(self):
         video = read_video_file("lifespan_plate.avi")
-        count = count_video(video, min_size=10, max_size=100, detailed_output=False, mask_plate=True, plate_edge_size=150)
+        count = count_video(video, min_size=10, max_size=100, detailed_output=False, plate_edge_size=150)
         self.assertTrue(isinstance(count, int))
         self.assertGreaterEqual(count, 85)
         self.assertLessEqual(count, 95)
 
     def test_count_old_adults(self):
-        video = read_video_file("lifespan_plate.avi")
-        count = count_video(video, min_size=10, max_size=100, detailed_output=False, mask_plate=True, plate_edge_size=150)
+        video = read_video_file("dying_plate.avi")
+        count = count_video(video, min_size=10, max_size=100, detailed_output=False, plate_edge_size=150)
         self.assertTrue(isinstance(count, int))
         self.assertGreaterEqual(count, 35)
         self.assertLessEqual(count, 45)

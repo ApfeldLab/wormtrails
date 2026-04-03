@@ -3,7 +3,7 @@ import numpy as np
 import pandas as pd
 from .processing import correct_vignetting, subtract_average, threshold_array
 
-def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thresh=None, head_motion_range=2,kernel_size=11, detailed_output=False, mask_plate=False, plate_edge_size=110):
+def count_video(video_array, min_size=10, max_size=100, corrected_thresh=203, motion_thresh=3, kernel_size=11, detailed_output=False, plate_edge_size=None, plate_width=None):
     """
     Counts the number of living worms in a video array using motion detection and size filtering.
     Currently optimized for bright field illumination with a bright background.
@@ -13,22 +13,19 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
         video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
         min_size: Integer value for the minimum size (pixel area) of a potential worm. Default is 10.
         max_size: Integer value for the maximum size (pixel area) of a potential worm. Default is 300.
-        thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), Otsu's threshold is calculated on masked frames.
+        corrected_thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), Otsu's threshold is calculated on masked frames.
         motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is calculated with Otsu's method.
-        head_motion_range: Integer value for the radius in pixels of the circular kernel used to expand the detected objects to include the head of the worm. Default is 2.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
-        detailed_output: Boolean value. If False (default), returns only the count. If True, returns a tuple with count, mask, and visualization.
-        mask_plate: Boolean value. If True, masks out the plate edges to exclude edge artifacts. Default is False.
+        detailed_output: Boolean value. If False (default), returns only the count. If True, returns a tuple with count, and visualization.
         plate_edge_size: Integer value for the width in pixels of the plate edge to be excluded when mask_plate=True. Default is 110.
 
     Returns:
         If detailed_output is False:
             An integer value for the number of living worms detected.
-        If detailed_output is True (default):
-            A tuple containing (n_moving, validated_objects, visualization) where:
-                - n_moving: Integer count of validated living worms
-                - validated_objects: 2D Numpy array mask of detected living worms
-                - visualization: Image of the plate with living worms highlighted
+        If detailed_output is True:
+            A tuple containing (count, visualization) where:
+                - count: Integer count of validated living worms
+                - visualization: Image of the plate with living worms highlighted (128) and travelling worms brightly highlighted (255)
 
     Raises:
         ValueError: If the video array cannot be processed or thresholds fail.
@@ -38,95 +35,142 @@ def count_video(video_array, min_size=10, max_size=300, thresh=None, motion_thre
         - Applies plate masking when enabled to avoid edge artifacts
         - Validates objects by requiring motion detection in each object's pixels
     """
-    corrected_video_array = correct_vignetting(video_array, kernel_size=kernel_size, use_median_blur=True, inplace=False) # correct spatiotemporal brightness variation
-    plate_mask = create_plate_mask(video_array[0], edge_size=plate_edge_size)
+    plate_mask = create_plate_mask(np.mean(video_array, axis=0), edge_size=plate_edge_size, plate_width=plate_width)
 
-    if thresh is None: # use Otsu's threshold if none is given
-        # Otsu's threshold is calculated on the first frame after masking out the background and plate edges
-        thresh, _ = cv2.threshold((corrected_video_array[0][plate_mask > 0]).reshape(1, -1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        thresh -= 2 # subtract 2 from the threshold to account for dominant read noise
-    
-    binary_array = threshold_array(corrected_video_array, thresh, dark_objects=True) # convert to binary, objects darker than surroundings
-    if mask_plate: # apply a plate mask to exclude edge artifacts
-        binary_array[:,plate_mask==0] = 0
-    
-    motion_array = subtract_average(video_array, use_projection=True, light_background=True, inplace=False) # create array containing only pixels which changed in value over the course of the recording
+    motion = np.zeros_like(video_array)
+    reference_frame = np.max(video_array, axis=0)
+    blur_frame = cv2.medianBlur(reference_frame, kernel_size)
+    target_brightness = np.mean(reference_frame)
+    for i in range(video_array.shape[0]):
+        frame = video_array[i].astype(np.float32)
+        frame_brightness = np.mean(frame)
+        frame *= (target_brightness / frame_brightness)
+        motion[i] = np.abs(frame.copy() - reference_frame).astype(np.uint8)
+        video_array[i] = (frame * target_brightness / blur_frame).astype(np.uint8)
 
-    # Look for objects fitting the size requirements in each frame
-    highest_count = 0
-    for i in range(video_array.shape[0]): # loop through frames, axis 0 is time in the video array
-        filtered_objects, n_objects = filter_objects_by_size(binary_array[i], min_size, max_size, return_count=True)
-        if n_objects > highest_count:
-            highest_count = n_objects
-            highest_count_index = i
-            highest_count_objects = filtered_objects
+    worms = np.zeros_like(video_array)
+    worms[video_array < corrected_thresh] = 255
+    worms[motion > motion_thresh] = 255
+    worms[:, plate_mask == 0] = 0
 
-    if motion_thresh is None: # use Otsu's threshold if none is given
-        # Otsu's threshold is calculated on the first frame after masking out the background and plate edges
-        motion_thresh, _ = cv2.threshold((np.max(motion_array, axis=0)[plate_mask > 0]).reshape(1, -1), 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    worms[worms > 0] = 32
+    counts = []
+    for t in range(worms.shape[0]):
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(worms[t], connectivity=8)
 
-    if highest_count > 0:
-        # Use the presence of motion to validate the objects fitting the size requirements
-        validated_objects, n_moving = validate_objects(highest_count_objects, motion_array[highest_count_index], validation_thresh=motion_thresh, expand_objects_radius=head_motion_range, return_count=True)
-    else:
-        validated_objects = np.zeros_like(binary_array[0])
-        n_moving = 0
-        highest_count_index = 0
+        areas = stats[:, cv2.CC_STAT_AREA]
+
+        moving_labels = labels.copy()
+        moving_labels[motion[t] < motion_thresh] = 0
+        moving_areas = np.bincount(moving_labels.ravel(), minlength=num_labels)
+
+        is_alive = (areas >= min_size) & (areas <= max_size) & (moving_areas > 0)
+        alive_worms = is_alive[labels]
+        worms[t, alive_worms] = 128
+
+        is_travelling = (areas >= min_size) & (areas <= max_size) & (moving_areas > areas // 2)
+        travelling_worms = is_travelling[labels]
+        worms[t, travelling_worms] = 255
+
+        counts.append(np.sum(is_alive.astype(np.uint32)))
+
+    count = int(np.mean(np.array(counts)))
 
     if detailed_output:
-        return n_moving, validated_objects, np.max([video_array[highest_count_index], validated_objects], axis=0)
+        return count, worms
     else:
-        return n_moving
+        return count
 
-def create_plate_mask(frame, edge_size=110, otsu_offset=0, kernel_size=None, light_background=True):
+def create_plate_mask(frame, edge_size=None, plate_width=None,light_background=True):
     """
     Creates a mask for the plate from a raw (uncorrected) still frame.
-    Performs vignetting correction and uses a modified Otsu threshold to identify the background.
-    A circular kernel of diameter edge_size is used to expand the background mask to cover the edges of the plate.
+    Determines the plate region by fitting circles to objects in a downsampled version of the image.
+    Optimized for speed and memory usage.
     
     Args:
         frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing a single raw (uncorrected) video frame.
         edge_size: Integer value for the size of the edge of the plate to be excluded in pixels. Default is 110.
-        otsu_offset: Integer value to offset the Otsu threshold. Useful for adjusting background detection sensitivity. Default is 0.
-        kernel_size: Odd integer value for the width of the kernel used to correct vignetting. If None, calculated from edge_size as edge_size*2 + 1.
         light_background: Boolean value. If True, assumes dark objects on light background. If False, assumes bright objects on dark background.
 
     Returns:
         A 2D Numpy array of 8 bit unsigned integers (uint8) containing the mask for the plate, with 1 for the plate region and 0 for the background.
 
     Notes:
-        - Vignetting correction is applied before thresholding for accurate masking
-        - The largest connected component not containing the image center is selected as the background
-        - A dilated circular kernel is used to exclude the plate edge region
+        - Downsamples the frame to a maximum dimension of 1024 for efficient processing
+        - Uses local thresholding (block size ~1/8 width) followed by contour analysis to identify circular objects
+        - Fits a circle to each candidate plate and applies the requested edge margin
+        - Returns a full-resolution mask
     """
 
-    # Perform vignetting correction prior to thresholding
-    if kernel_size is None:
-        kernel_size = edge_size*2 + 1
-    corrected_frame = correct_vignetting(frame, kernel_size=kernel_size, inplace=False)
+    # Ensure input is uint8 for OpenCV operations
+    if frame.dtype != np.uint8:
+        frame = frame.astype(np.uint8)
 
-    # Identifies the background using a modified Otsu threshold
-    otsu_thresh, _ = cv2.threshold(corrected_frame, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    background = threshold_array(corrected_frame, otsu_thresh + otsu_offset, dark_objects=not light_background, output_value=1)
+    # Downsample for speed and memory efficiency
+    h, w = frame.shape
+    target_dim = 1024
+    if max(h, w) > target_dim:
+        scale = target_dim / max(h, w)
+        small_frame = cv2.resize(frame, (0, 0), fx=scale, fy=scale, interpolation=cv2.INTER_AREA)
+    else:
+        scale = 1.0
+        small_frame = frame
+
+    if plate_width is None:
+        plate_width = max(h, w) * 0.8
+    if edge_size is None:
+        edge_size = int(plate_width * 0.2)
+    plate_width *= scale
+
+    # Pre-process to reduce noise and small artifacts
+    small_blurred = cv2.medianBlur(small_frame, 5)
+
+    # Use local thresholding to identify the plate
+    # block_size should be around 1/8 of the image width and must be odd
+    block_size = int(plate_width) * 2 + 1
+
+    if not light_background:
+        binary = cv2.adaptiveThreshold(small_blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                        cv2.THRESH_BINARY, block_size, 0)
+    else:
+        binary = cv2.adaptiveThreshold(small_blurred, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, 
+                                        cv2.THRESH_BINARY_INV, block_size, 0)
+
+    # Find contours in the thresholded image
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     
-    # Force background to be the largest detected connected component which does not contain the center
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(background, connectivity=8)
-    if num_labels > 1:
-        # Get the center coordinates and its label
-        height, width = background.shape
-        center_label = labels[height // 2, width // 2]
-        
-        areas = stats[:, cv2.CC_STAT_AREA]
-        areas[0] = 0 # don't include the background label
-        if center_label > 0:
-            areas[center_label] = 0
+    # Identify large circular contours that likely represent plates
+    min_area = (small_frame.shape[0] * small_frame.shape[1]) * 0.05 # at least 5% of the image area
+    plate_circles = []
+    
+    for cnt in contours:
+        area = cv2.contourArea(cnt)
+        if area > min_area:
+            (cx, cy), r = cv2.minEnclosingCircle(cnt)
+            # Circularity check: actual area vs circle area (at least 50% circularity)
+            circular_area = np.pi * (r ** 2)
+            if circular_area > 0 and (area / circular_area) > 0.5:
+                plate_circles.append((cx, cy, r))
 
-        largest_label = np.argmax(areas)
-        background = (labels == largest_label).astype(np.uint8)
+    # Create the full-resolution mask
+    mask = np.zeros_like(frame, dtype=np.uint8)
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (edge_size*2 + 1, edge_size*2 + 1))
-    plate_mask = 1 - cv2.dilate(background, kernel)
-    return plate_mask
+    if plate_circles:
+        for cx, cy, r in plate_circles:
+            # Scale coordinates back to original resolution
+            orig_cx = int(cx / scale)
+            orig_cy = int(cy / scale)
+            orig_r = int(r / scale)
+            
+            # Apply edge_size shrinkage
+            mask_r = max(0, orig_r - edge_size)
+            cv2.circle(mask, (orig_cx, orig_cy), mask_r, 1, -1)
+    else:
+        # Fallback if no specific circular object is identified
+        # Default to a centered circle or full mask if detection fails
+        mask.fill()
+
+    return mask * 255
 
 def validate_objects(binary_frame, validation_frame, validation_thresh=1, return_count=False, expand_objects_radius=0):
     """
