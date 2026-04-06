@@ -23,14 +23,13 @@ from .src.processing import (
 
 from .src.quantitative import (
     count_video,
+    find_worms,
     create_plate_mask,
-    validate_objects,
-    filter_objects_by_size,
+    track_and_label_worms,
     measure_chemotaxis,
     calculate_relative_metrics,
     measure_component,
-    measure_window,
-    track_and_label_worms
+    measure_window
 )
 
 from .src.colormaps import (

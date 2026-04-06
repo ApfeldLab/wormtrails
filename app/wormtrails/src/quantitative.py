@@ -1,13 +1,13 @@
 import cv2
 import numpy as np
 import pandas as pd
-from .processing import correct_vignetting, subtract_average, threshold_array
 
 def count_video(
     video_array, 
     min_size=10, 
-    max_size=100, 
-    corrected_thresh=203, 
+    max_size=300, 
+    persistence=1,
+    corrected_thresh=None, 
     motion_thresh=3, 
     kernel_size=11,  
     plate_edge_size=None, 
@@ -24,8 +24,9 @@ def count_video(
         video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
         min_size: Integer value for the minimum size (pixel area) of a potential worm. Default is 10.
         max_size: Integer value for the maximum size (pixel area) of a potential worm. Default is 300.
-        corrected_thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), Otsu's threshold is calculated on masked frames.
-        motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is calculated with Otsu's method.
+        persistence: Integer value for the number of frames a worm must be detected in to be counted. Default is 1.
+        corrected_thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), set to one less than the median pixel value.
+        motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is the 99.9th percentile of motion pixel values.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
         plate_edge_size: Integer value for the width in pixels of the plate edge to be excluded when mask_plate=True. Default is 20% the width of plate_width.
         plate_width: Integer value for the width of the plate in pixels. Default is 80% the width of the frame.
@@ -38,7 +39,7 @@ def count_video(
         If detailed_output is True:
             A tuple containing (count, visualization) where:
                 - count: Integer count of validated living worms
-                - visualization: Image of the plate with living worms highlighted (128) and travelling worms brightly highlighted (255)
+                - labeled_worms: 3D Numpy array of 16 bit unsigned integers (uint16) the same shape as video_array. Each worm is assigned a unique integer value.
 
     Raises:
         ValueError: If the video array cannot be processed or thresholds fail.
@@ -53,6 +54,57 @@ def count_video(
     
     plate_mask = create_plate_mask(np.mean(video_array, axis=0), edge_size=plate_edge_size, plate_width=plate_width)
 
+    worms = find_worms(video_array, plate_mask, min_size=min_size, max_size=max_size, corrected_thresh=corrected_thresh, motion_thresh=motion_thresh, kernel_size=kernel_size, inPlace=True)
+    labeled_worms = track_and_label_worms(worms, persistence=persistence)
+
+    count = len(np.unique(labeled_worms)) - 1
+
+    if detailed_output:
+        return count, labeled_worms
+    else:
+        return count
+
+def find_worms(
+    video_array,
+    plate_mask,
+    min_size=10,
+    max_size=300,
+    corrected_thresh=None,
+    motion_thresh=None,
+    kernel_size=11,
+    inPlace=False
+):
+    """
+    Finds living worms in a video array using motion detection and size filtering.
+    Currently optimized for bright field illumination with a bright background.
+    Recordings of 30 seconds to 1 minute are recommended for reliable results.
+    
+    Args:
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
+        plate_mask: 2D Numpy array of 8 bit unsigned integers (uint8) containing the plate mask. Plates should have pixel values greater than 0
+        min_size: Integer value for the minimum size (pixel area) of a potential worm. Default is 10.
+        max_size: Integer value for the maximum size (pixel area) of a potential worm. Default is 300.
+        corrected_thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), set to one less than the median pixel value.
+        motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is the 99.9th percentile of motion pixel values.
+        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
+        plate_edge_size: Integer value for the width in pixels of the plate edge to be excluded when mask_plate=True. Default is 20% the width of plate_width.
+        plate_width: Integer value for the width of the plate in pixels. Default is 80% the width of the frame.
+        inPlace: Boolean value. If True, the video array will be modified in place. If False (default), a copy of the video array will be used.
+
+    Returns:
+        3D Numpy array of 8 bit unsigned integers (uint8) the same shape as video_array. Living worms are 255 and background is 0.
+
+    Raises:
+        ValueError: If the video array cannot be processed or thresholds fail.
+
+    Notes:
+        - Uses vignetting correction with kernel-based blur
+        - Applies plate masking when enabled to avoid edge artifacts
+        - Validates objects by requiring motion detection in each object's pixels
+    """
+    if not inPlace:
+        video_array = video_array.copy()
+    
     motion = np.zeros_like(video_array)
     reference_frame = np.max(video_array, axis=0)
     blur_frame = cv2.medianBlur(reference_frame, kernel_size)
@@ -60,17 +112,21 @@ def count_video(
     for i in range(video_array.shape[0]):
         frame = video_array[i].astype(np.float32)
         frame_brightness = np.mean(frame)
-        frame *= (target_brightness / frame_brightness)
+        if frame_brightness > 0:
+            frame *= (target_brightness / frame_brightness)
         motion[i] = np.abs(frame.copy() - reference_frame).astype(np.uint8)
         video_array[i] = (frame * target_brightness / blur_frame).astype(np.uint8)
+    
+    if corrected_thresh is None:
+        corrected_thresh = np.median(video_array[:, plate_mask > 0]) - 1
+    if motion_thresh is None:
+        motion_thresh = np.quantile(motion[:, plate_mask > 0], 0.999)
 
     worms = np.zeros_like(video_array)
-    worms[video_array < corrected_thresh] = 255
-    worms[motion > motion_thresh] = 255
+    worms[video_array < corrected_thresh] = 1
+    worms[motion > motion_thresh] = 1
     worms[:, plate_mask == 0] = 0
 
-    worms[worms > 0] = 32
-    counts = []
     for t in range(worms.shape[0]):
         num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(worms[t], connectivity=8)
 
@@ -82,20 +138,11 @@ def count_video(
 
         is_alive = (areas >= min_size) & (areas <= max_size) & (moving_areas > 0)
         alive_worms = is_alive[labels]
-        worms[t, alive_worms] = 128
+        worms[t, alive_worms] = 255
 
-        is_travelling = (areas >= min_size) & (areas <= max_size) & (moving_areas > areas // 2)
-        travelling_worms = is_travelling[labels]
-        worms[t, travelling_worms] = 255
+    worms[worms < 255] = 0
 
-        counts.append(np.sum(is_alive.astype(np.uint32)))
-
-    count = int(np.mean(np.array(counts)))
-
-    if detailed_output:
-        return count, worms
-    else:
-        return count
+    return worms
 
 def create_plate_mask(frame, edge_size=None, plate_width=None, light_background=True):
     """
@@ -189,90 +236,153 @@ def create_plate_mask(frame, edge_size=None, plate_width=None, light_background=
 
     return mask * 255
 
-def validate_objects(binary_frame, validation_frame, validation_thresh=1, return_count=False, expand_objects_radius=0):
+def track_and_label_worms(binary_array, persistence=1):
     """
-    Validates identified objects in a binary frame by requiring that each object contains at least one pixel which surpasses a threshold in the validation frame.
-    Connected components in the binary frame are tested against the validation frame.
+    Tracks and labels worms in a 3D binary array across time.
     
     Args:
-        binary_frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing the binary frame with potential objects (0 and 255).
-        validation_frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing the validation frame to use to decide whether objects are valid.
-        validation_thresh: Integer value for the minimum pixel value in the validation frame required to validate an object. Default is 1.
-        return_count: Boolean value. If True, returns a tuple of (validated_objects, n_valid). If False, returns only the validated objects.
-        expand_objects_radius: Integer value for the radius of the kernel used to expand each object's validation region. Default is 0.
+        binary_array: 3D Numpy array (time, height, width) of uint8 binary data (0 and 255).
+        persistence: Integer for how many frames to copy a worm if it disappears. 
+            If a worm doesn't reappear within these frames, the ghosted copies are removed.
+            Also serves as the minimum number of frames a label must persist to be retained. 
+            Default is 1.
 
     Returns:
-        If return_count is False:
-            A binary 2D Numpy array of 8 bit unsigned integers containing only validated objects.
-        If return_count is True:
-            A tuple of (validated_objects, n_valid) where n_valid is the integer count of validated objects.
-
-    Notes:
-        - Each connected component is validated if any pixel in the validation frame exceeds validation_thresh
-        - Objects without sufficient motion in the validation frame are removed
+        3D Numpy array (time, height, width) of uint16 labels.
     """
-    # Find connected components and their statistics
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary_frame, connectivity=8)
-
-    # Count a potential object as a valid moving object if the validation frame surpasses the validation threshold in any of the object pixels
-    valid_objects = np.zeros_like(binary_frame)
-    n_valid = 0
-    for i in range(1, num_labels):
-        mask = (labels == i)
-        if expand_objects_radius > 0:
-            kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (expand_objects_radius*2 + 1, expand_objects_radius*2 + 1))
-            mask_expanded = cv2.dilate(mask.astype(np.uint8), kernel)
-        else:
-            mask_expanded = mask
-        if validation_frame[mask_expanded > 0].max() > validation_thresh:
-            valid_objects[mask > 0] = 255
-            n_valid += 1
-
-    if return_count:
-        return valid_objects, n_valid
-    else:
-        return valid_objects
-
-def filter_objects_by_size(binary_frame, min_size, max_size, return_count=False):
-    """
-    Removes objects from a binary image that do not fall within the specified size range.
-    Connected components are filtered based on their pixel area.
+    t_dim, h, w = binary_array.shape
+    labeled_array = np.zeros((t_dim, h, w), dtype=np.uint16)
     
-    Args:
-        binary_frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing the binary frame. Should contain only 0 and 255 pixel values.
-        min_size: Minimum pixel area for an object to be kept. Objects smaller than this are removed.
-        max_size: Maximum pixel area for an object to be kept. Objects larger than this are removed.
-        return_count: Boolean value. If True, returns a tuple of (filtered_objects, n_objects). If False, returns only the filtered objects.
-
-    Returns:
-        If return_count is False:
-            A binary 2D Numpy array of 8 bit unsigned integers containing only objects within the specified size range.
-        If return_count is True:
-            A tuple of (filtered_objects, n_objects) where n_objects is the integer count of objects kept.
-
-    Notes:
-        - The background (label 0) is always excluded from the size filtering
-        - Objects must have area between min_size and max_size (inclusive) to be retained
-    """
-    # Find connected components and their statistics
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(binary_frame, connectivity=8)
+    # Track the number of consecutive frames a label has been a "ghost" (copied but not detected)
+    ghost_counts = {} # label -> count
+    # Track the total number of frames each label appears in for persistence filtering
+    label_frame_counts = {} # label -> count
     
-    # Extract areas for all components (stats[:, 4] is the area column)
-    areas = stats[:, cv2.CC_STAT_AREA]
+    # First frame
+    num_labels, labels = cv2.connectedComponents(binary_array[0], connectivity=8)
+    labeled_array[0] = labels.astype(np.uint16)
+    next_label_id = num_labels
     
-    # Create a boolean mask for labels that satisfy the size constraints
-    # We explicitly exclude the background (label 0)
-    keep_mask = (areas >= min_size) & (areas <= max_size)
-    keep_mask[0] = False
-    
-    # Use the mask to filter the labels and return the binary result
-    filtered_objects = threshold_array(keep_mask[labels], 1, dark_objects=False)
+    for l in range(1, num_labels):
+        ghost_counts[l] = 0
+        if persistence > 1:
+            label_frame_counts[l] = 1
 
-    if return_count:
-        n_objects = np.sum(keep_mask)
-        return filtered_objects, n_objects
-    else:
-        return filtered_objects
+    # Kernel for dilation in Rule 5
+    kernel = np.ones((3, 3), dtype=np.uint8)
+
+    for t in range(1, t_dim):
+        prev_labels = labeled_array[t-1]
+        curr_binary = binary_array[t]
+        
+        # Current labeled frame
+        curr_frame = np.zeros((h, w), dtype=np.uint16)
+        
+        # 1. Identify connected components in current binary
+        num_curr, labels_curr, stats_curr, _ = cv2.connectedComponentsWithStats(curr_binary, connectivity=8)
+        
+        # 2. Track which previous labels are "used" by new detections
+        used_prev_labels = set()
+        
+        # 3. Process each component in frame t
+        for i in range(1, num_curr):
+            mask_i = (labels_curr == i)
+            
+            # Find unique labels from the previous frame in the current mask's footprint
+            overlapping = np.unique(prev_labels[mask_i])
+            overlapping = overlapping[overlapping > 0] # Remove background
+            
+            if len(overlapping) == 0:
+                # Rule 3: No overlap, assign new label
+                curr_frame[mask_i] = next_label_id
+                ghost_counts[next_label_id] = 0
+                next_label_id += 1
+                if next_label_id == 65535: # Safety check for uint16
+                    next_label_id = 1 # We might want to handle this better if it happens
+            
+            elif len(overlapping) == 1:
+                # Rule 2 & 6: Single overlap or split (multiple components overlap same prev label)
+                L = overlapping[0]
+                curr_frame[mask_i] = L
+                used_prev_labels.add(L)
+                ghost_counts[L] = 0
+            
+            else:
+                # Rule 5: Multiple overlaps (merge). Partition the current mask.
+                # Initialize local partition with seeds from overlapping labels
+                partition = np.zeros((h, w), dtype=np.uint16)
+                # Seeds are the pixels in mask_i that were labeled in prev_labels
+                for L in overlapping:
+                    partition[(prev_labels == L) & mask_i] = L
+                    used_prev_labels.add(L)
+                    ghost_counts[L] = 0
+                
+                # Expand seeds to fill mask_i
+                # We use a simple breadth-first expansion (dilation)
+                unfilled_mask_i = mask_i.copy()
+                unfilled_mask_i[partition > 0] = False
+                
+                while unfilled_mask_i.any():
+                    # Dilate all labels into the mask
+                    dilated = cv2.dilate(partition, kernel)
+                    # Find pixels in the mask that were just filled
+                    newly_filled = (partition == 0) & (dilated > 0) & mask_i
+                    if not newly_filled.any():
+                        break
+                    partition[newly_filled] = dilated[newly_filled]
+                    unfilled_mask_i[newly_filled] = False
+                
+                curr_frame[mask_i] = partition[mask_i]
+
+        # Rule 4: Handle missing worms (Persistence)
+        # Check all labels present in the previous frame
+        labels_in_prev = np.unique(prev_labels)
+        for L in labels_in_prev:
+            if L == 0: continue
+            if L not in used_prev_labels:
+                # This label disappeared in current binary. 
+                # Increment its ghost count and check persistence.
+                ghost_counts[L] = ghost_counts.get(L, 0) + 1
+                if ghost_counts[L] <= persistence and t < t_dim - 1:
+                    # Copy pixels into current frame
+                    mask_L = (prev_labels == L)
+                    # But only where current frame is still 0 (don't overwrite new detections)
+                    curr_frame[mask_L & (curr_frame == 0)] = L
+                    # Note: We don't add to used_prev_labels because it didn't find a binary match
+                else:
+                    # Label's ghost count surpassed persistence. It's officially dead. 
+                    # Remove the ghost copies that were previously added to the labeled_array.
+                    for t_ghost in range(t - persistence, t):
+                        if t_ghost >= 0:
+                            labeled_array[t_ghost][labeled_array[t_ghost] == L] = 0
+                            # Also decrement its frame count for the final persistence filter
+                            if L in label_frame_counts:
+                                label_frame_counts[L] -= 1
+
+                    # Label is officially removed from ghost_counts
+                    if L in ghost_counts: del ghost_counts[L]
+        
+        labeled_array[t] = curr_frame
+        
+        # Track label occurrences in this frame if we need to filter short tracks
+        if persistence > 1:
+            for L in np.unique(curr_frame):
+                if L > 0:
+                    label_frame_counts[L] = label_frame_counts.get(L, 0) + 1
+
+    # Final pass to remove short-lived tracks
+    if persistence > 1 and label_frame_counts:
+        max_label = np.max(labeled_array)
+        if max_label > 0:
+            # Use a lookup table to efficiently zero out labels with count < persistence
+            lookup = np.arange(max_label + 1, dtype=np.uint16)
+            for L, count in label_frame_counts.items():
+                if count < persistence:
+                    if L < len(lookup):
+                        lookup[L] = 0
+            labeled_array = lookup[labeled_array]
+
+    return labeled_array
 
 def calculate_relative_metrics(position, direction, test_spot):
     """
@@ -447,116 +557,3 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
 
     return pd.DataFrame(worm_data)
 
-def track_and_label_worms(binary_array, persistence=1):
-    """
-    Tracks and labels worms in a 3D binary array across time.
-    
-    Args:
-        binary_array: 3D Numpy array (time, height, width) of uint8 binary data (0 and 255).
-        persistence: Integer for how many frames to copy a worm if it disappears. Default is 1.
-
-    Returns:
-        3D Numpy array (time, height, width) of uint16 labels.
-    """
-    t_dim, h, w = binary_array.shape
-    labeled_array = np.zeros((t_dim, h, w), dtype=np.uint16)
-    
-    # Track the number of consecutive frames a label has been a "ghost" (copied but not detected)
-    ghost_counts = {} # label -> count
-    
-    # First frame
-    num_labels, labels = cv2.connectedComponents(binary_array[0], connectivity=8)
-    labeled_array[0] = labels.astype(np.uint16)
-    next_label_id = num_labels
-    
-    for l in range(1, num_labels):
-        ghost_counts[l] = 0
-
-    # Kernel for dilation in Rule 5
-    kernel = np.ones((3, 3), dtype=np.uint8)
-
-    for t in range(1, t_dim):
-        prev_labels = labeled_array[t-1]
-        curr_binary = binary_array[t]
-        
-        # Current labeled frame
-        curr_frame = np.zeros((h, w), dtype=np.uint16)
-        
-        # 1. Identify connected components in current binary
-        num_curr, labels_curr, stats_curr, _ = cv2.connectedComponentsWithStats(curr_binary, connectivity=8)
-        
-        # 2. Track which previous labels are "used" by new detections
-        used_prev_labels = set()
-        
-        # 3. Process each component in frame t
-        for i in range(1, num_curr):
-            mask_i = (labels_curr == i)
-            
-            # Find unique labels from the previous frame in the current mask's footprint
-            overlapping = np.unique(prev_labels[mask_i])
-            overlapping = overlapping[overlapping > 0] # Remove background
-            
-            if len(overlapping) == 0:
-                # Rule 3: No overlap, assign new label
-                curr_frame[mask_i] = next_label_id
-                ghost_counts[next_label_id] = 0
-                next_label_id += 1
-                if next_label_id == 65535: # Safety check for uint16
-                    next_label_id = 1 # We might want to handle this better if it happens
-            
-            elif len(overlapping) == 1:
-                # Rule 2 & 6: Single overlap or split (multiple components overlap same prev label)
-                L = overlapping[0]
-                curr_frame[mask_i] = L
-                used_prev_labels.add(L)
-                ghost_counts[L] = 0
-            
-            else:
-                # Rule 5: Multiple overlaps (merge). Partition the current mask.
-                # Initialize local partition with seeds from overlapping labels
-                partition = np.zeros((h, w), dtype=np.uint16)
-                # Seeds are the pixels in mask_i that were labeled in prev_labels
-                for L in overlapping:
-                    partition[(prev_labels == L) & mask_i] = L
-                    used_prev_labels.add(L)
-                    ghost_counts[L] = 0
-                
-                # Expand seeds to fill mask_i
-                # We use a simple breadth-first expansion (dilation)
-                unfilled_mask_i = mask_i.copy()
-                unfilled_mask_i[partition > 0] = False
-                
-                while unfilled_mask_i.any():
-                    # Dilate all labels into the mask
-                    dilated = cv2.dilate(partition, kernel)
-                    # Find pixels in the mask that were just filled
-                    newly_filled = (partition == 0) & (dilated > 0) & mask_i
-                    if not newly_filled.any():
-                        break
-                    partition[newly_filled] = dilated[newly_filled]
-                    unfilled_mask_i[newly_filled] = False
-                
-                curr_frame[mask_i] = partition[mask_i]
-
-        # Rule 4: Handle missing worms (Persistence)
-        # Check all labels present in the previous frame
-        labels_in_prev = np.unique(prev_labels)
-        for L in labels_in_prev:
-            if L == 0: continue
-            if L not in used_prev_labels:
-                # This label disappeared in current binary. 
-                # Increment its ghost count and check persistence.
-                ghost_counts[L] = ghost_counts.get(L, 0) + 1
-                if ghost_counts[L] <= persistence:
-                    # Copy pixels into current frame
-                    mask_L = (prev_labels == L)
-                    # But only where current frame is still 0 (don't overwrite new detections)
-                    curr_frame[mask_L & (curr_frame == 0)] = L
-                    # Note: We don't add to used_prev_labels because it didn't find a binary match
-                else:
-                    # Label is officially removed from ghost_counts as it's dead
-                    if L in ghost_counts: del ghost_counts[L]
-        
-        labeled_array[t] = curr_frame
-
-    return labeled_array
