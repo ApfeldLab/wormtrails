@@ -29,7 +29,8 @@ from .src.quantitative import (
     measure_chemotaxis,
     calculate_relative_metrics,
     measure_component,
-    measure_window
+    measure_window,
+    track_and_label_worms
 )
 
 from .src.colormaps import (

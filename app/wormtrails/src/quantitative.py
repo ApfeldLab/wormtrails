@@ -185,7 +185,7 @@ def create_plate_mask(frame, edge_size=None, plate_width=None, light_background=
     else:
         # Fallback if no specific circular object is identified
         # Default to a centered circle or full mask if detection fails
-        mask.fill()
+        mask.fill(1)
 
     return mask * 255
 
@@ -446,3 +446,117 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
             worm_data.append(m)
 
     return pd.DataFrame(worm_data)
+
+def track_and_label_worms(binary_array, persistence=1):
+    """
+    Tracks and labels worms in a 3D binary array across time.
+    
+    Args:
+        binary_array: 3D Numpy array (time, height, width) of uint8 binary data (0 and 255).
+        persistence: Integer for how many frames to copy a worm if it disappears. Default is 1.
+
+    Returns:
+        3D Numpy array (time, height, width) of uint16 labels.
+    """
+    t_dim, h, w = binary_array.shape
+    labeled_array = np.zeros((t_dim, h, w), dtype=np.uint16)
+    
+    # Track the number of consecutive frames a label has been a "ghost" (copied but not detected)
+    ghost_counts = {} # label -> count
+    
+    # First frame
+    num_labels, labels = cv2.connectedComponents(binary_array[0], connectivity=8)
+    labeled_array[0] = labels.astype(np.uint16)
+    next_label_id = num_labels
+    
+    for l in range(1, num_labels):
+        ghost_counts[l] = 0
+
+    # Kernel for dilation in Rule 5
+    kernel = np.ones((3, 3), dtype=np.uint8)
+
+    for t in range(1, t_dim):
+        prev_labels = labeled_array[t-1]
+        curr_binary = binary_array[t]
+        
+        # Current labeled frame
+        curr_frame = np.zeros((h, w), dtype=np.uint16)
+        
+        # 1. Identify connected components in current binary
+        num_curr, labels_curr, stats_curr, _ = cv2.connectedComponentsWithStats(curr_binary, connectivity=8)
+        
+        # 2. Track which previous labels are "used" by new detections
+        used_prev_labels = set()
+        
+        # 3. Process each component in frame t
+        for i in range(1, num_curr):
+            mask_i = (labels_curr == i)
+            
+            # Find unique labels from the previous frame in the current mask's footprint
+            overlapping = np.unique(prev_labels[mask_i])
+            overlapping = overlapping[overlapping > 0] # Remove background
+            
+            if len(overlapping) == 0:
+                # Rule 3: No overlap, assign new label
+                curr_frame[mask_i] = next_label_id
+                ghost_counts[next_label_id] = 0
+                next_label_id += 1
+                if next_label_id == 65535: # Safety check for uint16
+                    next_label_id = 1 # We might want to handle this better if it happens
+            
+            elif len(overlapping) == 1:
+                # Rule 2 & 6: Single overlap or split (multiple components overlap same prev label)
+                L = overlapping[0]
+                curr_frame[mask_i] = L
+                used_prev_labels.add(L)
+                ghost_counts[L] = 0
+            
+            else:
+                # Rule 5: Multiple overlaps (merge). Partition the current mask.
+                # Initialize local partition with seeds from overlapping labels
+                partition = np.zeros((h, w), dtype=np.uint16)
+                # Seeds are the pixels in mask_i that were labeled in prev_labels
+                for L in overlapping:
+                    partition[(prev_labels == L) & mask_i] = L
+                    used_prev_labels.add(L)
+                    ghost_counts[L] = 0
+                
+                # Expand seeds to fill mask_i
+                # We use a simple breadth-first expansion (dilation)
+                unfilled_mask_i = mask_i.copy()
+                unfilled_mask_i[partition > 0] = False
+                
+                while unfilled_mask_i.any():
+                    # Dilate all labels into the mask
+                    dilated = cv2.dilate(partition, kernel)
+                    # Find pixels in the mask that were just filled
+                    newly_filled = (partition == 0) & (dilated > 0) & mask_i
+                    if not newly_filled.any():
+                        break
+                    partition[newly_filled] = dilated[newly_filled]
+                    unfilled_mask_i[newly_filled] = False
+                
+                curr_frame[mask_i] = partition[mask_i]
+
+        # Rule 4: Handle missing worms (Persistence)
+        # Check all labels present in the previous frame
+        labels_in_prev = np.unique(prev_labels)
+        for L in labels_in_prev:
+            if L == 0: continue
+            if L not in used_prev_labels:
+                # This label disappeared in current binary. 
+                # Increment its ghost count and check persistence.
+                ghost_counts[L] = ghost_counts.get(L, 0) + 1
+                if ghost_counts[L] <= persistence:
+                    # Copy pixels into current frame
+                    mask_L = (prev_labels == L)
+                    # But only where current frame is still 0 (don't overwrite new detections)
+                    curr_frame[mask_L & (curr_frame == 0)] = L
+                    # Note: We don't add to used_prev_labels because it didn't find a binary match
+                else:
+                    # Label is officially removed from ghost_counts as it's dead
+                    if L in ghost_counts: del ghost_counts[L]
+        
+        labeled_array[t] = curr_frame
+
+    return labeled_array
