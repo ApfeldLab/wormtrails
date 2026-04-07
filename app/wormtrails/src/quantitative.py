@@ -137,6 +137,7 @@ def find_worms(
         moving_areas = np.bincount(moving_labels.ravel(), minlength=num_labels)
 
         is_alive = (areas >= min_size) & (areas <= max_size) & (moving_areas > 0)
+        is_alive[0] = False
         alive_worms = is_alive[labels]
         worms[t, alive_worms] = 255
 

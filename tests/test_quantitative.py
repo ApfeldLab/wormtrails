@@ -29,36 +29,41 @@ class TestQuantitative(unittest.TestCase):
 
     def test_count_young_adults(self):
         video = self.get_test_video("lifespan_plate.avi")
-        count = count_video(video, min_size=10, max_size=300, detailed_output=False, corrected_thresh=170, plate_edge_size=150)
+        count = count_video(
+            video,
+            min_size=10,
+            max_size=300,
+            persistence=10,
+            corrected_thresh=None,
+            motion_thresh=3,
+            kernel_size=11,
+            plate_width=1000,
+            plate_edge_size=150,
+            detailed_output=False,
+            inPlace=False
+        )
         self.assertTrue(isinstance(count, int))
         self.assertGreaterEqual(count, 80)
         self.assertLessEqual(count, 100)
 
-    def test_track_young_adults(self):
-        video = self.get_test_video("lifespan_plate.avi")
-        # Get binary array for tracking: stationary (128) and travelling (255) are both 255
-        _, worms = count_video(video, min_size=10, max_size=300, detailed_output=True, corrected_thresh=170, plate_edge_size=150)
-        binary = (worms >= 128).astype(np.uint8) * 255
-        labeled = track_and_label_worms(binary, persistence=5)
-        n_unique = len(np.unique(labeled)) - 1
-        self.assertGreaterEqual(n_unique, 80)
-        self.assertLessEqual(n_unique, 100)
-
     def test_count_old_adults(self):
         video = self.get_test_video("dying_plate.avi")
-        count = count_video(video, min_size=10, max_size=300, detailed_output=False, corrected_thresh=170, plate_edge_size=150)
+        count = count_video(
+            video,
+            min_size=10,
+            max_size=300,
+            persistence=10,
+            corrected_thresh=None,
+            motion_thresh=3,
+            kernel_size=11,
+            plate_width=1000,
+            plate_edge_size=150,
+            detailed_output=False,
+            inPlace=False
+        )
         self.assertTrue(isinstance(count, int))
         self.assertGreaterEqual(count, 35)
         self.assertLessEqual(count, 45)
-
-    def test_track_old_adults(self):
-        video = self.get_test_video("dying_plate.avi")
-        _, worms = count_video(video, min_size=10, max_size=300, detailed_output=True, corrected_thresh=170, plate_edge_size=150)
-        binary = (worms >= 128).astype(np.uint8) * 255
-        labeled = track_and_label_worms(binary, persistence=5)
-        n_unique = len(np.unique(labeled)) - 1
-        self.assertGreaterEqual(n_unique, 30)
-        self.assertLessEqual(n_unique, 50)
 
     def test_measure_chemotaxis(self):
         df = measure_chemotaxis(self.binary_video, time_window=5, interval=2, minimum_size=5, maximum_size=500, test_spot=(100,100))

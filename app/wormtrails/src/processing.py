@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import math
 
-def correct_vignetting(array, kernel_size=None, use_median_blur=False, inplace=False):
+def correct_vignetting(array, kernel_size=None, use_median_blur=False, inPlace=False):
     """
     Corrects vignetting in a video array by normalizing each frame to have the same brightness as the average frame and dividing by a blur of the average frame.
     If a single frame (2D array) is provided, the frame brightness adjustment step is skipped since no normalization is needed.
@@ -12,7 +12,7 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=False, inplace=F
     Args:
         array: 2D or 3D Numpy array containing the video frames. If 3D, time is axis 0. For 2D arrays, only vignetting correction (no brightness adjustment) is applied.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame. If None (default), the kernel size is calculated as one quarter the image width, rounded up and made odd.
-        inplace: Boolean value. If True, modifies the original array in place and returns it. If False (default), creates a copy and returns the copy.
+        inPlace: Boolean value. If True, modifies the original array in place and returns it. If False (default), creates a copy and returns the copy.
         use_median_blur: Boolean value. If True, uses median blur instead of Gaussian blur for the vignetting correction. Median blur is more robust to salt-and-pepper noise.
 
     Returns:
@@ -21,7 +21,7 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=False, inplace=F
     Raises:
         ValueError: If kernel_size is not provided and cannot be calculated from the array dimensions.
     """
-    if not inplace:
+    if not inPlace:
         array = array.copy()
 
     # Handle 2D and 3D arrays by wrapping 2D in a new axis for unified processing
@@ -56,10 +56,10 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=False, inplace=F
             # divide each frame by the blur of the average frame to correct vignetting or other large scale brightness variations
             array[i] = (scaled_frame * target_brightness / blur_frame).astype(np.uint8)
 
-    if not inplace:
+    if not inPlace:
         return array
 
-def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_difference=True, use_projection=False, light_background=True, inplace=False):
+def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_difference=True, use_projection=False, light_background=True, inPlace=False):
     """
     Subtracts the average frame or min/max projected frame from each frame in the video array.
     This effectively only shows pixels which change in value over the course of the recording.
@@ -73,7 +73,7 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
         use_absolute_difference: Boolean value. If True, uses absolute difference between scaled frames and average, making motion symmetric. If False, uses one-sided subtraction based on light_background.
         use_projection: Boolean value. If True, uses a min/max projection instead of mean for the average frame, which is useful when stationary background elements need to be preserved.
         light_background: Boolean value. If True, assumes dark worms on light background and uses inverted subtraction. If False, assumes bright objects on dark background.
-        inplace: Boolean value. If True, modifies the original array in place and returns it. If False (default), creates a copy and returns the copy.
+        inPlace: Boolean value. If True, modifies the original array in place and returns it. If False (default), creates a copy and returns the copy.
 
     Returns:
         video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the subtracted video frames with only motion visible, with time as axis 0.
@@ -81,7 +81,7 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
     Raises:
         ValueError: If video_array is not a 3D array with time as axis 0.
     """
-    if not inplace:
+    if not inPlace:
         video_array = video_array.copy()
 
     if average_end == -1:
@@ -114,7 +114,7 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
         else:
             video_array[i] = np.clip(scaled_frame - average_frame, 0, None).astype(np.uint8)
 
-    if not inplace:
+    if not inPlace:
         return video_array
 
 def create_track_array(average_subtracted_array, window):
@@ -215,7 +215,7 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
 
     return time_encoded_frame
 
-def add_timestamp(video_array, black_background=True, font_scale=1, font_thickness=1, seconds_per_frame=1, inplace=False):
+def add_timestamp(video_array, black_background=True, font_scale=1, font_thickness=1, seconds_per_frame=1, inPlace=False):
     """
     Adds a timestamp to each frame of the video array.
     This should be done last in the processing pipeline, after time encoding returns a color array.
@@ -226,16 +226,16 @@ def add_timestamp(video_array, black_background=True, font_scale=1, font_thickne
         font_scale: Float value for the OpenCV font scale. Controls the size of the timestamp text. Default is 1.
         font_thickness: Integer value for the OpenCV font thickness. Default is 1.
         seconds_per_frame: Float value for the frame time in seconds. This is the actual captured frame time (not the desired export frame time). Default is 1 second per frame.
-        inplace: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
+        inPlace: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
 
     Returns:
-        video_array: 4D Numpy array of 8 bit unsigned integers (uint8) containing the video frames with timestamps in bottom-left corner, with time as axis 0 and color channel as axis 3 (last axis). Returns None if inplace=True.
+        video_array: 4D Numpy array of 8 bit unsigned integers (uint8) containing the video frames with timestamps in bottom-left corner, with time as axis 0 and color channel as axis 3 (last axis). Returns None if inPlace=True.
 
     Notes:
         Only accepts color (3-channel) input since cv2.putText requires a color image.
         Timestamps are formatted as MM:SS and placed in the bottom-left corner of each frame.
     """
-    if not inplace:
+    if not inPlace:
         video_array = video_array.copy()
 
     num_frames, height, width, channel = video_array.shape # only accepts color input, since the cv2.putText function requires a color image
@@ -252,7 +252,7 @@ def add_timestamp(video_array, black_background=True, font_scale=1, font_thickne
         timestamp = f"{(total_seconds // 60):02d}:{(total_seconds % 60):02d}" # Timestamp format mm:ss
         cv2.putText(video_array[i], timestamp, position, font, font_scale, (color, color, color), font_thickness)
 
-    if not inplace:
+    if not inPlace:
         return video_array
 
 def normalize_array(video_array):
@@ -280,7 +280,7 @@ def normalize_array(video_array):
 
     return normalized_array
 
-def threshold_array(array, threshold, dark_objects=False, output_value=255, inplace=False):
+def threshold_array(array, threshold, dark_objects=False, output_value=255, inPlace=False):
     """
     Thresholds an array to create a binary array.
     Uses memory efficient operations to avoid int64 intermediates which can cause MemoryErrors on large arrays.
@@ -290,16 +290,16 @@ def threshold_array(array, threshold, dark_objects=False, output_value=255, inpl
         threshold: Numeric value for the threshold. Pixels above or below this value become output_value, others become 0.
         dark_objects: Boolean value. If True, objects darker than threshold become output_value (useful for dark worms on light background). If False, objects brighter than threshold become output_value (useful for light trails on dark background). Default is False.
         output_value: The value to use for foreground pixels (default 255). Use 1 for binary masks.
-        inplace: Boolean value. If True, modifies the original array in place and returns it. If False, creates and returns a copy. Only works on uint8 or float32 arrays.
+        inPlace: Boolean value. If True, modifies the original array in place and returns it. If False, creates and returns a copy. Only works on uint8 or float32 arrays.
 
     Returns:
-        binary_array: uint8 Numpy array containing only 0s and output_value pixels. Returns the modified array or None if inplace=True.
+        binary_array: uint8 Numpy array containing only 0s and output_value pixels. Returns the modified array or None if inPlace=True.
 
     Notes:
         - For dark_objects=True: pixels < threshold become output_value
         - For dark_objects=False: pixels >= threshold become output_value
     """
-    if inplace:
+    if inPlace:
         thresh_type = cv2.THRESH_BINARY_INV if dark_objects else cv2.THRESH_BINARY
         if array.ndim == 3:
             for i in range(array.shape[0]):
