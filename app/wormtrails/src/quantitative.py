@@ -12,6 +12,7 @@ def count_video(
     kernel_size=11,  
     plate_edge_size=None, 
     plate_width=None,
+    high_sensitivity=False,
     detailed_output=False,
     inPlace=False
 ):
@@ -30,6 +31,7 @@ def count_video(
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
         plate_edge_size: Integer value for the width in pixels of the plate edge to be excluded when mask_plate=True. Default is 20% the width of plate_width.
         plate_width: Integer value for the width of the plate in pixels. Default is 80% the width of the frame.
+        high_sensitivity: Boolean value. If True, the motion threshold will be allowed to be 0 if pixels are grouped together. False by default.
         detailed_output: Boolean value. If False (default), returns only the count. If True, returns a tuple with count, and visualization.
         inPlace: Boolean value. If True, the video array will be modified in place. If False (default), a copy of the video array will be used.
 
@@ -54,7 +56,16 @@ def count_video(
     
     plate_mask = create_plate_mask(np.mean(video_array, axis=0), edge_size=plate_edge_size, plate_width=plate_width)
 
-    worms = find_worms(video_array, plate_mask, min_size=min_size, max_size=max_size, corrected_thresh=corrected_thresh, motion_thresh=motion_thresh, kernel_size=kernel_size, inPlace=True)
+    worms = find_worms(
+        video_array, 
+        plate_mask, 
+        min_size=min_size, 
+        max_size=max_size, 
+        corrected_thresh=corrected_thresh, 
+        motion_thresh=motion_thresh, 
+        kernel_size=kernel_size, 
+        high_sensitivity=high_sensitivity,
+        inPlace=True)
     labeled_worms = track_and_label_worms(worms, persistence=persistence)
 
     count = len(np.unique(labeled_worms)) - 1
@@ -72,6 +83,7 @@ def find_worms(
     corrected_thresh=None,
     motion_thresh=None,
     kernel_size=11,
+    high_sensitivity=False,
     inPlace=False
 ):
     """
@@ -87,8 +99,7 @@ def find_worms(
         corrected_thresh: Integer value for the threshold for converting the video array to a binary array. If None (default), set to one less than the median pixel value.
         motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving. Default is the 99.9th percentile of motion pixel values.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
-        plate_edge_size: Integer value for the width in pixels of the plate edge to be excluded when mask_plate=True. Default is 20% the width of plate_width.
-        plate_width: Integer value for the width of the plate in pixels. Default is 80% the width of the frame.
+        high_sensitivity: Boolean value. If True, the motion threshold will be allowed to be 0 if pixels are grouped together. False by default.
         inPlace: Boolean value. If True, the video array will be modified in place. If False (default), a copy of the video array will be used.
 
     Returns:
@@ -99,7 +110,7 @@ def find_worms(
 
     Notes:
         - Uses vignetting correction with kernel-based blur
-        - Applies plate masking when enabled to avoid edge artifacts
+        - Detects potential objects with loose thresholds applied to the vignetting corrected and motion arrays, followed by erosion, and strict thresholds
         - Validates objects by requiring motion detection in each object's pixels
     """
     if not inPlace:
@@ -123,7 +134,15 @@ def find_worms(
         motion_thresh = np.quantile(motion[:, plate_mask > 0], 0.999)
 
     worms = np.zeros_like(video_array)
+    # loose threshold
     worms[video_array < corrected_thresh] = 1
+    worms[motion > 0] = 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
+    for t in range(worms.shape[0]):
+        cv2.morphologyEx(worms[t], cv2.MORPH_OPEN, kernel, worms[t])
+
+    # strict threshold
+    worms[video_array < corrected_thresh - 1] = 1
     worms[motion > motion_thresh] = 1
     worms[:, plate_mask == 0] = 0
 
@@ -133,13 +152,22 @@ def find_worms(
         areas = stats[:, cv2.CC_STAT_AREA]
 
         moving_labels = labels.copy()
-        moving_labels[motion[t] < motion_thresh] = 0
+        if high_sensitivity:
+            motion_binary = cv2.morphologyEx((motion[t] > 0).astype(np.uint8), cv2.MORPH_OPEN, kernel)
+            motion_binary[motion[t] > motion_thresh] = 1
+            moving_labels[motion_binary == 0] = 0
+        else:
+            moving_labels[motion[t] < motion_thresh] = 0
+
         moving_areas = np.bincount(moving_labels.ravel(), minlength=num_labels)
 
         is_alive = (areas >= min_size) & (areas <= max_size) & (moving_areas > 0)
         is_alive[0] = False
+        is_small = (areas < min_size) & (moving_areas > 0)
+        is_small[0] = False
         alive_worms = is_alive[labels]
         worms[t, alive_worms] = 255
+        worms[t] |= cv2.dilate(is_small[labels].astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(np.sqrt(30 / np.pi)) * 2 - 1,)*2)) * 255
 
     worms[worms < 255] = 0
 
