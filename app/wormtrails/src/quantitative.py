@@ -6,7 +6,7 @@ def count_video(
     video_array, 
     min_size=10, 
     max_size=300, 
-    persistence=1,
+    persistence=None,
     corrected_thresh=None, 
     strict_corrected_thresh=None,
     motion_thresh=None, 
@@ -98,7 +98,7 @@ def find_worms(
     strict_corrected_thresh=None,
     motion_thresh=None,
     strict_motion_thresh=None,
-    kernel_size=11,
+    kernel_size=None,
     high_sensitivity=False,
     inPlace=False
 ):
@@ -114,9 +114,9 @@ def find_worms(
         max_size: Integer value for the maximum size (pixel area) of a potential worm. Default is 300.
         corrected_thresh: Integer value for the threshold for converting the video array to a binary array, with thresholded pixels being eroded before inclusion. If None (default), set to one less than the median pixel value.
         strict_corrected_thresh: Integer value for the threshold for converting the video array to a binary array, with all thresholded pixels included. If None (default), set to one less than corrected_thresh.
-        motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving, with thresholded pixels being eroded before inclusion. Default is the 99.9th percentile of motion pixel values.
-        strict_motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving, with all thresholded pixels included. Default is the 99.9th percentile of motion pixel values plus one.
-        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is 11.
+        motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving, with thresholded pixels being eroded before inclusion. Default is Otsu's threshold of nonzero motion pixel values.
+        strict_motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving, with all thresholded pixels included. Default is motion_thresh plus one.
+        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is double the maximum worm width, assuming a worm has an aspect ratio of 1:10.
         high_sensitivity: Boolean value. If True, the motion threshold will be allowed to be 0 if pixels are grouped together. False by default.
         inPlace: Boolean value. If True, the video array will be modified in place. If False (default), a copy of the video array will be used.
 
@@ -133,7 +133,9 @@ def find_worms(
     """
     if not inPlace:
         video_array = video_array.copy()
-    
+    if kernel_size is None:
+        kernel_size = int(np.sqrt(max_size / 10)) * 2 + 1
+
     motion = np.zeros_like(video_array)
     reference_frame = np.max(video_array, axis=0)
     blur_frame = cv2.medianBlur(reference_frame, kernel_size)
@@ -146,10 +148,12 @@ def find_worms(
         motion[i] = np.abs(frame.copy() - reference_frame).astype(np.uint8)
         video_array[i] = (frame * target_brightness / blur_frame).astype(np.uint8)
     
+    motion[:, plate_mask == 0] = 0
+
     if corrected_thresh is None:
         corrected_thresh = np.median(video_array[:, plate_mask > 0]) - 1
     if motion_thresh is None:
-        motion_thresh = np.quantile(motion[:, plate_mask > 0], 0.999)
+        motion_thresh, _ = cv2.threshold(motion[motion > 0], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     if strict_corrected_thresh is None:
         strict_corrected_thresh = corrected_thresh - 1
     if strict_motion_thresh is None:
@@ -287,7 +291,7 @@ def create_plate_mask(frame, edge_size=None, plate_width=None, light_background=
 
     return mask * 255
 
-def track_and_label_worms(binary_array, persistence=1):
+def track_and_label_worms(binary_array, persistence=None):
     """
     Tracks and labels worms in a 3D binary array across time.
     
@@ -303,6 +307,9 @@ def track_and_label_worms(binary_array, persistence=1):
     """
     t_dim, h, w = binary_array.shape
     labeled_array = np.zeros((t_dim, h, w), dtype=np.uint16)
+
+    if persistence is None:
+        persistence = np.min([t_dim, 10])
     
     # Track the number of consecutive frames a label has been a "ghost" (copied but not detected)
     ghost_counts = {} # label -> count
