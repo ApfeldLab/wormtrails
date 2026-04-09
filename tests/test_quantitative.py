@@ -23,44 +23,47 @@ class TestQuantitative(unittest.TestCase):
 
     def test_count_video(self):
         # We test with detailed_output=False
-        count = count_video(self.video, min_size=5, max_size=500, detailed_output=False)
+        n_roaming, n_quiescent, vis = count_video(self.video, min_worm_area=5, max_worm_area=500)
+        count = int(n_roaming + n_quiescent)
         self.assertTrue(isinstance(count, int))
         self.assertGreaterEqual(count, 0)
 
     def test_count_young_adults(self):
         video = self.get_test_video("lifespan_plate.avi")
-        count = count_video(
+        n_roaming, n_quiescent, vis = count_video(
             video,
-            min_size=10,
-            max_size=300,
-            persistence=10,
-            corrected_thresh=None,
+            worm_diameter=4,
             motion_thresh=3,
-            kernel_size=11,
-            plate_width=1000,
-            plate_edge_size=150,
-            detailed_output=False,
-            inPlace=False
+            strict_motion_thresh=None,
+            stationary_thresh_offset=-2,
+            contrast_thresh=90,
+            min_worm_area=20,
+            max_worm_area=200,
+            max_stationary_worm_length=30,
+            return_vis=False
         )
+        count = int(n_roaming + n_quiescent)
+        print(count)
         self.assertTrue(isinstance(count, int))
-        self.assertGreaterEqual(count, 80)
-        self.assertLessEqual(count, 100)
+        self.assertGreaterEqual(count, 95)
+        self.assertLessEqual(count, 115)
 
     def test_count_old_adults(self):
         video = self.get_test_video("dying_plate.avi")
-        count = count_video(
+        n_roaming, n_quiescent, vis = count_video(
             video,
-            min_size=10,
-            max_size=300,
-            persistence=10,
-            corrected_thresh=None,
+            worm_diameter=4,
             motion_thresh=3,
-            kernel_size=11,
-            plate_width=1000,
-            plate_edge_size=150,
-            detailed_output=False,
-            inPlace=False
+            strict_motion_thresh=None,
+            stationary_thresh_offset=-2,
+            contrast_thresh=90,
+            min_worm_area=20,
+            max_worm_area=200,
+            max_stationary_worm_length=30,
+            return_vis=False
         )
+        count = int(n_roaming + n_quiescent)
+        print(count)
         self.assertTrue(isinstance(count, int))
         self.assertGreaterEqual(count, 35)
         self.assertLessEqual(count, 45)

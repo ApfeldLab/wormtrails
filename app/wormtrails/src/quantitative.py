@@ -3,6 +3,134 @@ import numpy as np
 import pandas as pd
 
 def count_video(
+    video_array,
+    worm_diameter=4,
+    motion_thresh=2,
+    strict_motion_thresh=None,
+    stationary_thresh_offset=-2,
+    contrast_thresh=80,
+    min_worm_area=10,
+    max_worm_area=200,
+    max_stationary_worm_length=20,
+    return_vis=True
+):
+    # load video
+    video = video_array.copy()
+
+    # create kernels which we'll use throughout the pipeline
+    kernel_size_small = 3
+    kernel_size_medium = 11
+    kernel_size_large = 99
+
+    kernel_small = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size_small, kernel_size_small))
+    kernel_medium = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size_medium, kernel_size_medium))
+    kernel_large = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (kernel_size_large, kernel_size_large))
+
+    # Remove edge noise: the edges are basically static but jitter slightly.
+    # We find edges using the background image (max projection is the plate without moving worms)
+    bg_img = np.median(video, axis=0).astype(np.float64)
+    grad_x = cv2.Sobel(bg_img, cv2.CV_64F, 1, 0, ksize=kernel_size_small)
+    grad_y = cv2.Sobel(bg_img, cv2.CV_64F, 0, 1, ksize=kernel_size_small)
+    grad = np.sqrt(grad_x**2 + grad_y**2)
+    # the plate boundary has massive gradient
+    edge_mask = grad > np.percentile(grad, contrast_thresh)
+
+    # erode enough to ensure no high contrast worms are included
+    edge_mask = cv2.erode(edge_mask.astype(np.uint8), kernel_small, iterations=int(worm_diameter/2))
+    # dilate edge mask to ensure we cover the jitter zone
+    edge_mask = cv2.dilate(edge_mask.astype(np.uint8), kernel_medium)
+    _, edge_labels = cv2.connectedComponents(1 - edge_mask, connectivity=8)
+    plate_label = edge_labels[edge_labels.shape[0]//2, edge_labels.shape[1]//2]
+    edge_mask[edge_labels != plate_label] = 1
+    edge_mask = cv2.morphologyEx(edge_mask, cv2.MORPH_CLOSE, kernel_large)
+    edge_mask = cv2.morphologyEx(edge_mask, cv2.MORPH_OPEN, kernel_medium)
+
+    # get max intensity projection and motion array
+    max_proj = np.max(video, axis=0)
+    min_proj = np.min(video, axis=0)
+    motion_proj = max_proj.copy() - min_proj.copy()
+
+    # threshold
+    if strict_motion_thresh is not None:
+        ret, strict_motion_mask = cv2.threshold(motion_proj.copy(), strict_motion_thresh, 255, cv2.THRESH_BINARY)
+    ret, motion_mask = cv2.threshold(motion_proj.copy(), motion_thresh, 255, cv2.THRESH_BINARY)
+
+    # apply edge mask out
+    motion_mask[edge_mask > 0] = 0
+    if strict_motion_thresh is not None:
+        strict_motion_mask[edge_mask > 0] = 0
+    motion_proj[edge_mask > 0] = 0
+
+    # remove small noise and expand
+    motion_mask = cv2.erode(motion_mask, kernel_small)
+    motion_mask = cv2.dilate(motion_mask, kernel_medium)
+    if strict_motion_thresh is not None:
+        strict_motion_mask = cv2.erode(strict_motion_mask, kernel_small)
+        strict_motion_mask = cv2.dilate(strict_motion_mask, kernel_medium)
+
+    # get stationary objects
+    stationary = (min_proj.copy().astype(np.float64) * np.mean(max_proj.copy()) / cv2.medianBlur(max_proj.copy(), worm_diameter*2 + 1)).astype(np.uint8)
+    stationary_thresh = np.median(stationary[edge_mask == 0]) + stationary_thresh_offset
+    ret, stationary = cv2.threshold(stationary, stationary_thresh, 255, cv2.THRESH_BINARY_INV)
+    stationary[edge_mask > 0] = 0
+
+    # connected components
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(motion_mask, connectivity=8)
+    n_roaming = 0
+    if return_vis:
+        vis = video.copy()
+    for l in range(1, num_labels):
+        trail_length = (stats[l, cv2.CC_STAT_WIDTH]**2 + stats[l, cv2.CC_STAT_HEIGHT]**2)**0.5
+        if trail_length > max_stationary_worm_length + kernel_size_medium: # a worm in such a region will be roaming, and all its pixels will surpass motion_thresh
+            motion_mask[labels == l] = 0 # remove analyzed trails of roaming worms from the motion mask
+            if strict_motion_thresh is not None:
+                strict_motion_mask[labels == l] = 0
+            if return_vis:
+                vis[:, labels == l] = 128
+            label_counts = []
+            for t in range(video.shape[0]):
+                motion_frame = max_proj.copy() - video[t].copy()
+                motion_frame[labels != l] = 0 # only look at the current label
+                ret, motion_frame = cv2.threshold(motion_frame, motion_thresh, 255, cv2.THRESH_BINARY)
+                num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(motion_frame, connectivity=8)
+                areas = stats_t[:, cv2.CC_STAT_AREA]
+                areas[0] = 0
+                is_valid = (areas >= min_worm_area) & (areas <= max_worm_area)
+                label_count_t = np.sum(is_valid)
+                label_counts.append(label_count_t)
+                if return_vis:
+                    vis[t, is_valid[labels_t]] = 255
+            label_count = np.max(label_counts)
+            n_roaming += label_count
+            print(f"Label {l}: {label_count}  ", end="\r")
+    print(f"Total roaming worms: {n_roaming}")
+
+    # floodfill the stationary binary image from points in the motion mask
+    alive_stationary = np.zeros_like(stationary)
+    num_labels_sw, labels_sw, stats_sw, _ = cv2.connectedComponentsWithStats(stationary, connectivity=8)
+
+    # Find labels in stationary that intersect with the remaining motion_mask
+    if strict_motion_thresh is not None:
+        overlapping_labels = np.unique(labels_sw[strict_motion_mask > 0])
+    else:
+        overlapping_labels = np.unique(labels_sw[motion_mask > 0])
+    n_stationary_alive = 0
+    for label_idx in overlapping_labels:
+        if label_idx == 0: 
+            continue
+        elif stats_sw[label_idx, cv2.CC_STAT_AREA] >= min_worm_area and stats_sw[label_idx, cv2.CC_STAT_AREA] <= max_worm_area:
+            alive_stationary[labels_sw == label_idx] = 255
+            n_stationary_alive += 1
+
+    print(f"Total living stationary worms: {n_stationary_alive}")
+
+    if return_vis:
+        vis[:, alive_stationary > 0] = 255
+        video = vis
+
+    return n_roaming, n_stationary_alive, video
+
+def count_video_deprecated(
     video_array, 
     min_size=10, 
     max_size=300, 
