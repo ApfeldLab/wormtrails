@@ -32,34 +32,30 @@ class TestQuantitative(unittest.TestCase):
         video = self.get_test_video("lifespan_plate.avi")
         n_roaming, n_quiescent, vis = count_video(
             video,
-            worm_diameter=4,
-            motion_thresh=3,
-            strict_motion_thresh=None,
-            stationary_thresh_offset=-2,
-            contrast_thresh=90,
-            min_worm_area=20,
+            min_worm_area=10,
             max_worm_area=200,
             max_stationary_worm_length=30,
+            motion_thresh=2,
+            strict_motion_thresh=2,
+            stationary_thresh_offset=4,
             return_vis=False
         )
         count = int(n_roaming + n_quiescent)
         print(count)
         self.assertTrue(isinstance(count, int))
         self.assertGreaterEqual(count, 95)
-        self.assertLessEqual(count, 115)
+        self.assertLessEqual(count, 110)
 
     def test_count_old_adults(self):
         video = self.get_test_video("dying_plate.avi")
         n_roaming, n_quiescent, vis = count_video(
             video,
-            worm_diameter=4,
-            motion_thresh=3,
-            strict_motion_thresh=None,
-            stationary_thresh_offset=-2,
-            contrast_thresh=90,
-            min_worm_area=20,
+            min_worm_area=10,
             max_worm_area=200,
             max_stationary_worm_length=30,
+            motion_thresh=2,
+            strict_motion_thresh=2,
+            stationary_thresh_offset=4,
             return_vis=False
         )
         count = int(n_roaming + n_quiescent)

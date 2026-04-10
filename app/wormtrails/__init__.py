@@ -23,9 +23,6 @@ from .src.processing import (
 
 from .src.quantitative import (
     count_video,
-    find_worms,
-    create_plate_mask,
-    track_and_label_worms,
     measure_chemotaxis,
     calculate_relative_metrics,
     measure_component,
