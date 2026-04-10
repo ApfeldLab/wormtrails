@@ -34,10 +34,12 @@ class TestQuantitative(unittest.TestCase):
             video,
             min_worm_area=10,
             max_worm_area=200,
-            max_stationary_worm_length=30,
             motion_thresh=2,
             strict_motion_thresh=3,
+            max_stationary_worm_length=30,
             stationary_thresh_offset=4,
+            edge_contrast_loDiff=2,
+            edge_offset=3,
             return_vis=False
         )
         count = int(n_roaming + n_quiescent)
@@ -52,10 +54,12 @@ class TestQuantitative(unittest.TestCase):
             video,
             min_worm_area=10,
             max_worm_area=200,
-            max_stationary_worm_length=30,
             motion_thresh=2,
             strict_motion_thresh=3,
+            max_stationary_worm_length=30,
             stationary_thresh_offset=4,
+            edge_contrast_loDiff=2,
+            edge_offset=3,
             return_vis=False
         )
         count = int(n_roaming + n_quiescent)

@@ -6,17 +6,18 @@ def count_video(
     video_array,
     min_worm_area=10,
     max_worm_area=200,
-    max_stationary_worm_length=20,
-    motion_thresh=None,
-    strict_motion_thresh=None,
-    stationary_thresh_offset=4,
+    motion_thresh=2,
+    strict_motion_thresh=3,
+    max_stationary_worm_length=30,
+    stationary_thresh_offset=2,
+    edge_contrast_loDiff=1,
+    edge_offset=3,
     return_vis=True
 ):
     # currently fixed parameters:
-    edge_contrast_loDiff = 2
-    edge_contrast_upDiff = 10
     kernel_size_small = 3
-    kernel_size_medium = 11
+    kernel_size_medium = 11 # should be around double the width of a large worm
+    edge_contrast_upDiff = 10
 
     # load video
     video = video_array.copy()
@@ -30,28 +31,6 @@ def count_video(
     min_proj = np.min(video, axis=0)
     motion_proj = max_proj.copy() - min_proj.copy()
 
-    # create mask to remove edges
-    plate_mask = max_proj.copy()
-    seed_point = [plate_mask.shape[0]//2, plate_mask.shape[1]//2]
-    cv2.floodFill(plate_mask, None, seed_point, 255, edge_contrast_loDiff, edge_contrast_upDiff)
-    plate_mask[plate_mask < 255] = 0
-    plate_mask = cv2.morphologyEx(plate_mask, cv2.MORPH_CLOSE, kernel_medium)
-
-    # use masked motion projection to choose motion thresholds if none are given
-    motion_proj[plate_mask == 0] = 0
-    if strict_motion_thresh is None:
-        strict_motion_thresh, _ = cv2.threshold(motion_proj.copy()[motion_proj > 0], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    if motion_thresh is None:
-        motion_thresh, _ = cv2.threshold(motion_proj.copy()[(motion_proj > 0) & (motion_proj < strict_motion_thresh)], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-    # threshold
-    ret, strict_motion_mask = cv2.threshold(motion_proj.copy(), strict_motion_thresh, 255, cv2.THRESH_BINARY)
-    ret, motion_mask = cv2.threshold(motion_proj.copy(), motion_thresh, 255, cv2.THRESH_BINARY)
-
-    # remove small noise and expand mask for roaming worm detection
-    motion_mask = cv2.erode(motion_mask, kernel_small)
-    motion_mask = cv2.dilate(motion_mask, kernel_medium)
-
     # get stationary objects
     stationary = min_proj.copy()
     stationary = cv2.adaptiveThreshold(
@@ -62,19 +41,45 @@ def count_video(
         kernel_size_medium,
         stationary_thresh_offset
     )
+
+    # create mask to remove edges
+    plate_mask = max_proj.copy()
+    seed_point = [plate_mask.shape[0]//2, plate_mask.shape[1]//2]
+    cv2.floodFill(plate_mask, None, seed_point, 255, edge_contrast_loDiff, edge_contrast_upDiff)
+    plate_mask[plate_mask < 255] = 0
+    plate_mask = cv2.morphologyEx(plate_mask, cv2.MORPH_OPEN, kernel_medium)
+    _, plate_mask_labels, plate_mask_stats, _ = cv2.connectedComponentsWithStats(plate_mask, connectivity=4)
+    plate_mask[plate_mask_labels != np.argmax(plate_mask_stats[1:, cv2.CC_STAT_AREA]) + 1] = 0
+    plate_mask = cv2.morphologyEx(plate_mask, cv2.MORPH_CLOSE, kernel_medium)
+    plate_mask = cv2.erode(plate_mask, kernel_small, iterations=edge_offset)
+    motion_proj[plate_mask == 0] = 0
     stationary[plate_mask == 0] = 0
+
+    # threshold
+    ret, strict_motion_mask = cv2.threshold(motion_proj.copy(), strict_motion_thresh, 255, cv2.THRESH_BINARY)
+    ret, motion_mask = cv2.threshold(motion_proj.copy(), motion_thresh, 255, cv2.THRESH_BINARY)
+
+    # remove small noise and expand mask for roaming worm detection
+    for noise_size_thresh in [1, 15]: # single pixels are filtered out first, then adjacent pixel pairs
+        _, mask_labels, mask_stats, _ = cv2.connectedComponentsWithStats(motion_mask, connectivity=8)
+        areas = mask_stats[:, cv2.CC_STAT_AREA]
+        areas[0] = 0
+        motion_mask[(areas <= noise_size_thresh)[mask_labels]] = 0
+        motion_mask = cv2.dilate(motion_mask, kernel_small)
+    stationary[cv2.erode(motion_mask.copy(), kernel_small, iterations=2) > 0] = 255
+    motion_mask = cv2.dilate(motion_mask, kernel_medium)
+    motion_mask[plate_mask == 0] = 0
+    strict_motion_mask[plate_mask == 0] = 0
 
     # connected components
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(motion_mask, connectivity=8)
     n_roaming = 0
     if return_vis:
         vis = video.copy()
+        vis[:, motion_proj > motion_thresh] = 0
     for l in range(1, num_labels):
         trail_length = (stats[l, cv2.CC_STAT_WIDTH]**2 + stats[l, cv2.CC_STAT_HEIGHT]**2)**0.5
-        if trail_length > max_stationary_worm_length + kernel_size_medium: # a worm in such a region will be roaming, and all its pixels will surpass motion_thresh
-            strict_motion_mask[labels == l] = 0 # remove analyzed trails of roaming worms from the strict motion mask, which will be used to check for stationary worms
-            if return_vis:
-                vis[:, labels == l] = 128
+        if trail_length > max_stationary_worm_length + kernel_size_medium + 2*kernel_size_small: # a worm in such a region will be roaming, and all its pixels will surpass motion_thresh
             label_counts = []
             for t in range(video.shape[0]):
                 motion_frame = max_proj.copy() - video[t].copy()
@@ -86,11 +91,16 @@ def count_video(
                 is_valid = (areas >= min_worm_area) & (areas <= max_worm_area)
                 label_count_t = np.sum(is_valid)
                 label_counts.append(label_count_t)
-                if return_vis:
+                if return_vis and np.max(label_counts) > 0:
                     vis[t, is_valid[labels_t]] = 255
             label_count = np.max(label_counts)
             n_roaming += label_count
-            print(f"Label {l}: {label_count}  ", end="\r")
+            if label_count > 0:
+                strict_motion_mask[labels == l] = 0 # remove analyzed trails of roaming worms from the strict motion mask, which will be used to check for stationary worms
+                stationary[labels == l] = 0
+                print(f"Label {l}: {label_count}  ", end="\r")
+                if return_vis:
+                    vis[(vis != 255) & (labels == l)] = 128
     print(" "*60, end="\r")
 
     # floodfill the stationary binary image from points in the motion mask
