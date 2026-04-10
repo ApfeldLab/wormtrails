@@ -36,7 +36,7 @@ class TestQuantitative(unittest.TestCase):
             max_worm_area=200,
             max_stationary_worm_length=30,
             motion_thresh=2,
-            strict_motion_thresh=2,
+            strict_motion_thresh=3,
             stationary_thresh_offset=4,
             return_vis=False
         )
@@ -54,7 +54,7 @@ class TestQuantitative(unittest.TestCase):
             max_worm_area=200,
             max_stationary_worm_length=30,
             motion_thresh=2,
-            strict_motion_thresh=2,
+            strict_motion_thresh=3,
             stationary_thresh_offset=4,
             return_vis=False
         )

@@ -48,9 +48,7 @@ def count_video(
     ret, strict_motion_mask = cv2.threshold(motion_proj.copy(), strict_motion_thresh, 255, cv2.THRESH_BINARY)
     ret, motion_mask = cv2.threshold(motion_proj.copy(), motion_thresh, 255, cv2.THRESH_BINARY)
 
-    # remove small noise and expand
-    strict_motion_mask = cv2.erode(strict_motion_mask, kernel_small)
-    strict_motion_mask = cv2.dilate(strict_motion_mask, kernel_medium)
+    # remove small noise and expand mask for roaming worm detection
     motion_mask = cv2.erode(motion_mask, kernel_small)
     motion_mask = cv2.dilate(motion_mask, kernel_medium)
 
@@ -74,8 +72,7 @@ def count_video(
     for l in range(1, num_labels):
         trail_length = (stats[l, cv2.CC_STAT_WIDTH]**2 + stats[l, cv2.CC_STAT_HEIGHT]**2)**0.5
         if trail_length > max_stationary_worm_length + kernel_size_medium: # a worm in such a region will be roaming, and all its pixels will surpass motion_thresh
-            motion_mask[labels == l] = 0 # remove analyzed trails of roaming worms from the motion mask
-            strict_motion_mask[labels == l] = 0
+            strict_motion_mask[labels == l] = 0 # remove analyzed trails of roaming worms from the strict motion mask, which will be used to check for stationary worms
             if return_vis:
                 vis[:, labels == l] = 128
             label_counts = []
@@ -115,116 +112,6 @@ def count_video(
         video = vis
 
     return n_roaming, n_stationary_alive, video
-
-def find_worms(
-    video_array,
-    plate_mask,
-    min_size=10,
-    max_size=300,
-    corrected_thresh=None,
-    strict_corrected_thresh=None,
-    motion_thresh=None,
-    strict_motion_thresh=None,
-    kernel_size=None,
-    high_sensitivity=False,
-    inPlace=False
-):
-    """
-    Finds living worms in a video array using motion detection and size filtering.
-    Currently optimized for bright field illumination with a bright background.
-    Recordings of 30 seconds to 1 minute are recommended for reliable results.
-    
-    Args:
-        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
-        plate_mask: 2D Numpy array of 8 bit unsigned integers (uint8) containing the plate mask. Plates should have pixel values greater than 0
-        min_size: Integer value for the minimum size (pixel area) of a potential worm. Default is 10.
-        max_size: Integer value for the maximum size (pixel area) of a potential worm. Default is 300.
-        corrected_thresh: Integer value for the threshold for converting the video array to a binary array, with thresholded pixels being eroded before inclusion. If None (default), set to one less than the median pixel value.
-        strict_corrected_thresh: Integer value for the threshold for converting the video array to a binary array, with all thresholded pixels included. If None (default), set to one less than corrected_thresh.
-        motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving, with thresholded pixels being eroded before inclusion. Default is Otsu's threshold of nonzero motion pixel values.
-        strict_motion_thresh: Integer value for the motion detection threshold. Pixels with motion values above this are considered moving, with all thresholded pixels included. Default is motion_thresh plus one.
-        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame for vignetting correction. Default is double the maximum worm width, assuming a worm has an aspect ratio of 1:10.
-        high_sensitivity: Boolean value. If True, the motion threshold will be allowed to be 0 if pixels are grouped together. False by default.
-        inPlace: Boolean value. If True, the video array will be modified in place. If False (default), a copy of the video array will be used.
-
-    Returns:
-        3D Numpy array of 8 bit unsigned integers (uint8) the same shape as video_array. Living worms are 255 and background is 0.
-
-    Raises:
-        ValueError: If the video array cannot be processed or thresholds fail.
-
-    Notes:
-        - Uses vignetting correction with kernel-based blur
-        - Detects potential objects with loose thresholds applied to the vignetting corrected and motion arrays, followed by erosion, and strict thresholds
-        - Validates objects by requiring motion detection in each object's pixels
-    """
-    if not inPlace:
-        video_array = video_array.copy()
-    if kernel_size is None:
-        kernel_size = int(np.sqrt(max_size / 10)) * 2 + 1
-
-    motion = np.zeros_like(video_array)
-    reference_frame = np.max(video_array, axis=0)
-    blur_frame = cv2.medianBlur(reference_frame, kernel_size)
-    target_brightness = np.mean(reference_frame)
-    for i in range(video_array.shape[0]):
-        frame = video_array[i].astype(np.float32)
-        frame_brightness = np.mean(frame)
-        if frame_brightness > 0:
-            frame *= (target_brightness / frame_brightness)
-        motion[i] = np.abs(frame.copy() - reference_frame).astype(np.uint8)
-        video_array[i] = (frame * target_brightness / blur_frame).astype(np.uint8)
-    
-    motion[:, plate_mask == 0] = 0
-
-    if corrected_thresh is None:
-        corrected_thresh = np.median(video_array[:, plate_mask > 0]) - 1
-    if motion_thresh is None:
-        motion_thresh, _ = cv2.threshold(motion[motion > 0], 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    if strict_corrected_thresh is None:
-        strict_corrected_thresh = corrected_thresh - 1
-    if strict_motion_thresh is None:
-        strict_motion_thresh = motion_thresh + 1
-
-    worms = np.zeros_like(video_array)
-    # loose threshold
-    worms[video_array < corrected_thresh] = 1
-    worms[motion > motion_thresh] = 1
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3,3))
-    for t in range(worms.shape[0]):
-        cv2.morphologyEx(worms[t], cv2.MORPH_OPEN, kernel, worms[t])
-
-    # strict threshold
-    worms[video_array < strict_corrected_thresh] = 1
-    worms[motion > strict_motion_thresh] = 1
-    worms[:, plate_mask == 0] = 0
-
-    for t in range(worms.shape[0]):
-        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(worms[t], connectivity=8)
-
-        areas = stats[:, cv2.CC_STAT_AREA]
-
-        moving_labels = labels.copy()
-        if high_sensitivity:
-            motion_binary = cv2.morphologyEx((motion[t] > motion_thresh).astype(np.uint8), cv2.MORPH_OPEN, kernel)
-            motion_binary[motion[t] > strict_motion_thresh] = 1
-            moving_labels[motion_binary == 0] = 0
-        else:
-            moving_labels[motion[t] < strict_motion_thresh] = 0
-
-        moving_areas = np.bincount(moving_labels.ravel(), minlength=num_labels)
-
-        is_alive = (areas >= min_size) & (areas <= max_size) & (moving_areas > 0)
-        is_alive[0] = False
-        is_small = (areas < min_size) & (moving_areas > 0)
-        is_small[0] = False
-        alive_worms = is_alive[labels]
-        worms[t, alive_worms] = 255
-        worms[t] |= cv2.dilate(is_small[labels].astype(np.uint8), cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (int(np.sqrt(30 / np.pi)) * 2 - 1,)*2)) * 255
-
-    worms[worms < 255] = 0
-
-    return worms
 
 def calculate_relative_metrics(position, direction, test_spot):
     """
