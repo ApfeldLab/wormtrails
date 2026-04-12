@@ -255,64 +255,65 @@ def add_timestamp(video_array, black_background=True, font_scale=1, font_thickne
     if not inPlace:
         return video_array
 
-def normalize_array(video_array):
-    """
-    Normalizes the video array to a range of 0-255 using global scaling.
-    This is not necessary for properly exposed recordings, but can be useful for high bit depth or underexposed recordings.
-    
-    Args:
-        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
+def align_frames(ref, target):
+    orb = cv2.ORB_create(nfeatures=5000)
 
-    Returns:
-        normalized_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the normalized video frames, with time as axis 0.
+    kp1, des1 = orb.detectAndCompute(ref, None)
+    kp2, des2 = orb.detectAndCompute(target, None)
 
-    Notes:
-        Uses a single scale factor calculated from the maximum value across all frames to prevent flickering.
-    """
-    scale_factor = 255/np.max(video_array) # set one scale factor for all frames to avoid flickering
-    normalized_array = np.empty_like(video_array, dtype=np.uint8)
+    if des1 is None or des2 is None:
+        raise ValueError("Could not detect features")
 
-    for i in range(video_array.shape[0]):
-        frame = video_array[i].astype(np.float32) # use 32 bit float while scaling
-        scaled_frame = frame * scale_factor
+    # Use BFMatcher with k-NN and ratio test
+    bf = cv2.BFMatcher(cv2.NORM_HAMMING)
+    matches = bf.knnMatch(des1, des2, k=2)
 
-        normalized_array[i] = scaled_frame.astype(np.uint8)
+    # Apply Lowe's ratio test
+    good = []
+    for m_n in matches:
+        if len(m_n) == 2:
+            m, n = m_n
+            if m.distance < 0.7 * n.distance:
+                good.append(m)
 
-    return normalized_array
+    print(f"Filtered matches: {len(good)}")
 
-def threshold_array(array, threshold, dark_objects=False, output_value=255, inPlace=False):
-    """
-    Thresholds an array to create a binary array.
-    Uses memory efficient operations to avoid int64 intermediates which can cause MemoryErrors on large arrays.
-    
-    Args:
-        array: Numpy array of shape (H,W) or (T,H,W) to threshold. Should be 8-bit unsigned integers (uint8).
-        threshold: Numeric value for the threshold. Pixels above or below this value become output_value, others become 0.
-        dark_objects: Boolean value. If True, objects darker than threshold become output_value (useful for dark worms on light background). If False, objects brighter than threshold become output_value (useful for light trails on dark background). Default is False.
-        output_value: The value to use for foreground pixels (default 255). Use 1 for binary masks.
-        inPlace: Boolean value. If True, modifies the original array in place and returns it. If False, creates and returns a copy. Only works on uint8 or float32 arrays.
+    if len(good) < 15:
+        raise ValueError("Not enough good matches")
 
-    Returns:
-        binary_array: uint8 Numpy array containing only 0s and output_value pixels. Returns the modified array or None if inPlace=True.
+    # Get matched points
+    src_pts = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
+    dst_pts = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
 
-    Notes:
-        - For dark_objects=True: pixels < threshold become output_value
-        - For dark_objects=False: pixels >= threshold become output_value
-    """
-    if inPlace:
-        thresh_type = cv2.THRESH_BINARY_INV if dark_objects else cv2.THRESH_BINARY
-        if array.ndim == 3:
-            for i in range(array.shape[0]):
-                cv2.threshold(array[i], threshold, output_value, thresh_type, dst=array[i])
-        else:
-            cv2.threshold(array, threshold, output_value, thresh_type, dst=array)
+    # Use homography with RANSAC to handle rotation
+    H, mask = cv2.findHomography(src_pts, dst_pts, cv2.RANSAC, 5.0, maxIters=5000)
 
-    else:
-        if dark_objects:
-            binary_array = (array < threshold).astype(np.uint8)
-        else:
-            binary_array = (array >= threshold).astype(np.uint8)
-        
-        if output_value != 1:
-            binary_array *= output_value
-        return binary_array
+    if H is None:
+        raise ValueError("Could not find homography")
+
+    inliers = mask.ravel() > 0
+    print(f"Inliers: {np.sum(inliers)}/{len(inliers)}")
+
+    # Convert homography to affine parameters
+    # H is 3x3: [[a b c], [d e f], [0 0 1]]
+    a, b, c = H[0, 0], H[0, 1], H[0, 2]
+    d, e, f = H[1, 0], H[1, 1], H[1, 2]
+
+    # Calculate rotation angle (use atan2(-b, a) for correct sign)
+    angle = np.degrees(np.arctan2(-b, a))
+    scale = np.sqrt(a**2 + b**2)
+
+    print(f"Homography:\n{H}")
+    print(f"Rotation: {angle:.2f}°, Translation: ({c:.1f}, {f:.1f}), Scale: {scale:.4f}")
+
+    # Apply transformation
+    h, w = ref.shape[:2]
+    aligned = cv2.warpPerspective(
+        target, 
+        H, 
+        (w, h),
+        flags=cv2.INTER_LINEAR + cv2.WARP_INVERSE_MAP,
+        borderMode=cv2.BORDER_REPLICATE
+    )
+
+    return aligned

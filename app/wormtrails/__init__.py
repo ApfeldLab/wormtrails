@@ -16,9 +16,8 @@ from .src.processing import (
     create_track_array,
     create_time_encoded_array,
     create_time_encoded_frame,
-    add_timestamp, 
-    normalize_array,
-    threshold_array
+    add_timestamp,
+    align_frames
 )
 
 from .src.quantitative import (
