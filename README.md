@@ -34,7 +34,7 @@ The `show_time_encoding` function is used to preview your visualization, and tak
 
 The final and most versatile visualization parameter is `colormap`. This parameter must be in the form of a two dimensional numpy array, with each column containing a desired BGR (Blue Green Red) color value. These colors will be applied to the trails in order from their start frame to end frame, with the first column being used to color the first frame and the last column being used to color the last frame, and colors in between being chosen from the middle columns. 
 
-Several colormaps are included, such as white-to-black and black-to-white gradients, as well as some oscillating brightness colormaps. They can be found in `wormtrails/src/colormaps.py` and accessed the same as wormtrails functions. Colormaps in svg form may be used by first converting them to a pixel-based image format such as .png with image editing software such as GIMP, then loading them in as so:
+Several colormaps are included, such as white-to-black and black-to-white gradients, as well as some oscillating brightness colormaps. They can be found in `src/wormtrails/colormaps.py` and accessed the same as wormtrails functions. Colormaps in svg form may be used by first converting them to a pixel-based image format such as .png with image editing software such as GIMP, then loading them in as so:
 ```
 import wormtrails as wts
 import cv2
