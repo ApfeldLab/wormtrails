@@ -2,13 +2,13 @@ from setuptools import setup, find_packages
 
 setup(
     name='wormtrails',
-    version='1.3.3',
+    version='1.4.0',
     author='Christopher Dante Ashih',
     description='A tool for generating track figures from video recordings of C. elegans',
     long_description=open('README.md').read(),
     long_description_content_type='text/markdown',
-    packages=find_packages(where='app'),
-    package_dir={'': 'app'},
+    packages=find_packages(where='src'),
+    package_dir={'': 'src'},
     install_requires=[
         'numpy',
         'opencv-python',

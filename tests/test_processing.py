@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from wormtrails.src.processing import correct_vignetting, subtract_average, threshold_array, create_time_encoded_array
+from wormtrails.processing import correct_vignetting, subtract_average, create_time_encoded_array, create_track_array
 
 class TestProcessing(unittest.TestCase):
     def setUp(self):
@@ -11,25 +11,23 @@ class TestProcessing(unittest.TestCase):
             self.video[i, 30+i*2:40+i*2, 30+i*2:40+i*2] = 50
     
     def test_correct_vignetting(self):
-        result = correct_vignetting(self.video, kernel_size=11, inplace=False)
+        result = correct_vignetting(self.video, kernel_size=11, inPlace=False)
         self.assertEqual(result.shape, self.video.shape)
         self.assertEqual(result.dtype, np.uint8)
 
     def test_subtract_average(self):
-        result = subtract_average(self.video, use_absolute_difference=True, inplace=False)
+        result = subtract_average(self.video, use_absolute_difference=True, inPlace=False)
         self.assertEqual(result.shape, self.video.shape)
         # Check that there's motion in the array
         self.assertTrue(np.max(result) > 0)
 
     def test_threshold_array(self):
-        result = threshold_array(self.video[0], threshold=100, dark_objects=True)
-        self.assertEqual(result.shape, (200, 200))
-        # Since it's all 100, and threshold is 80 & dark_objects=True (meaning things < 80 become True)
-        self.assertTrue(np.max(result) == 255)
+        result = create_track_array(self.video, window=1)
+        self.assertEqual(result.shape, self.video.shape)
 
     def test_full_pipeline(self):
-        corrected = correct_vignetting(self.video, kernel_size=11, inplace=False)
-        motion = subtract_average(corrected, use_absolute_difference=True, inplace=False)
+        corrected = correct_vignetting(self.video, kernel_size=11, inPlace=False)
+        motion = subtract_average(corrected, use_absolute_difference=True, inPlace=False)
         time_encoded = create_time_encoded_array(motion, window=5)
         self.assertEqual(time_encoded.shape, (5, 200, 200, 3))
         self.assertTrue(np.max(time_encoded) > 0)

@@ -2,8 +2,8 @@ import unittest
 import numpy as np
 import pandas as pd
 import os
-from wormtrails.src.quantitative import count_video, measure_chemotaxis, track_and_label_worms
-from wormtrails.src.file_io import read_video_file
+from wormtrails.quantitative import count_video, measure_chemotaxis
+from wormtrails.file_io import read_video_file
 
 class TestQuantitative(unittest.TestCase):
     def setUp(self):
