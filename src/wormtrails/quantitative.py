@@ -6,20 +6,17 @@ def count_video(
     video_array,
     min_worm_area=10,
     max_worm_area=300,
+    max_stationary_worm_length=30,
+    worm_kernel_size=11,
+    worm_thresh=3,
     motion_thresh=2,
     strict_motion_thresh=3,
     strict_motion_dilation=1,
-    dwelling_thresh=6,
-    max_stationary_worm_length=30,
-    trail_break_correction_kernel_size=1,
-    stationary_kernel_size=11,
-    stationary_thresh=3,
+    contrast_motion_correction_factor=50,
     edge_contrast_kernel_size=51,
     edge_contrast_thresh=1,
     mask_inclusion_kernel_size=31,
     edge_offset=3,
-    contrast_motion_correction_factor=50,
-    fill_stationary_trails=True,
     return_vis=True
 ):
     # currently fixed parameters:
@@ -30,7 +27,6 @@ def count_video(
 
     # create kernels which we'll use throughout the pipeline
     small_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (small_kernel_size, small_kernel_size))
-    trail_break_correction_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (trail_break_correction_kernel_size, trail_break_correction_kernel_size))
     mask_inclusion_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (mask_inclusion_kernel_size, mask_inclusion_kernel_size))
 
     # get max intensity projection and motion array
@@ -50,13 +46,32 @@ def count_video(
     motion_proj[motion_proj < 0] = 0
     motion_proj = motion_proj.astype(np.uint8)
 
-    motion_array = np.zeros_like(video, dtype=np.uint8)
-    for t in range(motion_array.shape[0]):
+    # find living worms which will be used for counting the number of worms in trails
+    worms = np.zeros_like(video, dtype=np.uint8)
+    #potential_worms_array = worms.copy()
+    #motion_array = worms.copy()
+    for t in range(worms.shape[0]):
+        potential_worms = cv2.adaptiveThreshold(
+            video[t].copy(),
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            worm_kernel_size,
+            worm_thresh
+        )
         motion_frame = np.abs(background.copy().astype(np.int16) - video[t].copy().astype(np.int16)).astype(np.float64)
         motion_frame -= grad / contrast_motion_correction_factor
         motion_frame[motion_frame < 0] = 0
-        motion_array[t] = motion_frame.copy().astype(np.uint8)
-    median_motion = np.median(motion_array, axis=0).astype(np.uint8)
+
+        num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(potential_worms, connectivity=8)
+        moving_labels_t = np.unique(labels_t[motion_frame > motion_thresh])
+        is_moving = np.isin(np.arange(num_labels_t), moving_labels_t)
+        areas = stats_t[:, cv2.CC_STAT_AREA]
+        is_valid = (areas >= min_worm_area) & (areas <= max_worm_area) & is_moving
+        is_valid[0] = False
+        worms[t, is_valid[labels_t]] = 255
+        #potential_worms_array[t] = potential_worms.copy()
+        #motion_array[t] = motion_frame.copy().astype(np.uint8)
 
     # get stationary objects
     stationary = median_proj.copy()
@@ -65,8 +80,8 @@ def count_video(
         255,
         cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
         cv2.THRESH_BINARY_INV,
-        stationary_kernel_size,
-        stationary_thresh
+        worm_kernel_size,
+        worm_thresh
     )
 
     # create mask to remove edges
@@ -85,6 +100,7 @@ def count_video(
     plate_mask[plate_mask < 255] = 0
     plate_mask = cv2.morphologyEx(plate_mask, cv2.MORPH_CLOSE, mask_inclusion_kernel)
     plate_mask = cv2.erode(plate_mask, small_kernel, iterations=edge_offset)
+    worms[:, plate_mask == 0] = 0
     motion_proj[plate_mask == 0] = 0
     stationary[plate_mask == 0] = 0
 
@@ -99,30 +115,12 @@ def count_video(
         areas[0] = 0
         motion_mask[(areas <= noise_size_thresh)[mask_labels]] = 0
         motion_mask = cv2.dilate(motion_mask, small_kernel)
-    reduced_motion_mask = cv2.erode(motion_mask.copy(), small_kernel, iterations=2)
-    if fill_stationary_trails:
-        stationary[reduced_motion_mask > 0] = 255
-
-    motion_mask = cv2.dilate(motion_mask, trail_break_correction_kernel)
+    motion_mask = cv2.erode(motion_mask, small_kernel, iterations=2)
+    stationary[motion_mask > 0] = 255
     motion_mask[plate_mask == 0] = 0
     strict_motion_mask[plate_mask == 0] = 0
 
-    # floodfill the stationary binary image from points which were moving for more than half the scan
-    dwelling_mask = np.zeros_like(stationary)
-    num_labels_d, labels_d, stats_d, _ = cv2.connectedComponentsWithStats(stationary, connectivity=8)
-
-    # Find labels in stationary that intersect with median_motion
-    overlapping_labels = np.unique(labels_d[median_motion > dwelling_thresh])
-    n_dwelling = 0
-    for label_idx in overlapping_labels:
-        area = stats_d[label_idx, cv2.CC_STAT_AREA]
-        if label_idx == 0: 
-            continue
-        elif area >= min_worm_area and area <= max_worm_area:
-            dwelling_mask[labels_d == label_idx] = 255
-            n_dwelling += 1
-
-    # connected components
+    # loop through trails and find the number of worms in each one
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(motion_mask, connectivity=8)
     n_roaming = 0
     if return_vis:
@@ -130,26 +128,20 @@ def count_video(
         vis[:, motion_proj > motion_thresh] = 0
     for l in range(1, num_labels):
         trail_length = (stats[l, cv2.CC_STAT_WIDTH]**2 + stats[l, cv2.CC_STAT_HEIGHT]**2)**0.5
-        if trail_length > max_stationary_worm_length + trail_break_correction_kernel_size + 2*small_kernel_size: # a worm in such a region will be roaming, and all its pixels will surpass motion_thresh
+        if trail_length > max_stationary_worm_length: # a worm in such a region will be roaming, and all its pixels will surpass motion_thresh
             label_counts = []
             for t in range(video.shape[0]):
-                motion_frame = motion_array[t].copy()
-                motion_frame[labels != l] = 0 # only look at the current label
-                ret, motion_frame = cv2.threshold(motion_frame, motion_thresh, 255, cv2.THRESH_BINARY)
-                num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(motion_frame, connectivity=8)
-                dwelling_labels = np.unique(labels_t[(labels_t > 0) & (dwelling_mask > 0)])
-                areas = stats_t[:, cv2.CC_STAT_AREA]
-                is_dwelling = np.isin(np.arange(num_labels_t), dwelling_labels)
-                is_valid = (areas >= min_worm_area) & (areas <= max_worm_area) & ~is_dwelling
-                is_valid[0] = False
-                label_count_t = np.sum(is_valid)
-                label_counts.append(label_count_t)
+                worms_t = worms[t].copy()
+                worms_t[labels != l] = 0
+                num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(worms_t, connectivity=8)
+                label_counts.append(num_labels_t - 1)
                 if return_vis and np.max(label_counts) > 0:
-                    vis[t, is_valid[labels_t]] = 255
+                    vis[t, labels_t > 0] = 255
             label_count = np.max(label_counts)
             n_roaming += label_count
             if label_count > 0:
-                strict_motion_mask[(dwelling_mask == 0) & (labels == l)] = 0 # remove analyzed trails of roaming worms from the strict motion mask, which will be used to check for stationary worms
+                strict_motion_mask[labels == l] = 0 # remove analyzed trails of roaming worms from the strict motion mask, which will be used to check for stationary worms
+                stationary[labels == l] = 0
                 print(f"Label {l}: {label_count}  ", end="\r")
                 if return_vis:
                     vis[(vis != 255) & (labels == l)] = 128
@@ -161,6 +153,7 @@ def count_video(
 
     # Find labels in stationary that intersect with the motion_mask
     overlapping_labels = np.unique(labels_sw[cv2.dilate(strict_motion_mask, small_kernel, iterations=strict_motion_dilation) > 0])
+    # TODO: if a label is larger than max_stationary_worm_length, either split it into small enough regions or only fill regions up to max_stationary_worm_length
     n_stationary_alive = 0
     for label_idx in overlapping_labels:
         area = stats_sw[label_idx, cv2.CC_STAT_AREA]
