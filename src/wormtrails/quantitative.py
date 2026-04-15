@@ -6,7 +6,6 @@ def count_video(
     video_array,
     min_worm_area=10,
     max_worm_area=300,
-    max_stationary_worm_length=30,
     worm_kernel_size=11,
     worm_thresh=3,
     motion_thresh=2,
@@ -48,8 +47,6 @@ def count_video(
 
     # find living worms which will be used for counting the number of worms in trails
     worms = np.zeros_like(video, dtype=np.uint8)
-    #potential_worms_array = worms.copy()
-    #motion_array = worms.copy()
     for t in range(worms.shape[0]):
         potential_worms = cv2.adaptiveThreshold(
             video[t].copy(),
@@ -70,8 +67,6 @@ def count_video(
         is_valid = (areas >= min_worm_area) & (areas <= max_worm_area) & is_moving
         is_valid[0] = False
         worms[t, is_valid[labels_t]] = 255
-        #potential_worms_array[t] = potential_worms.copy()
-        #motion_array[t] = motion_frame.copy().astype(np.uint8)
 
     # get stationary objects
     stationary = median_proj.copy()
@@ -127,14 +122,17 @@ def count_video(
         vis = video.copy()
         vis[:, motion_proj > motion_thresh] = 0
     for l in range(1, num_labels):
-        trail_length = (stats[l, cv2.CC_STAT_WIDTH]**2 + stats[l, cv2.CC_STAT_HEIGHT]**2)**0.5
-        if trail_length > max_stationary_worm_length: # a worm in such a region will be roaming, and all its pixels will surpass motion_thresh
+        trail_area = stats[l, cv2.CC_STAT_AREA]
+        if trail_area > min_worm_area:
             label_counts = []
             for t in range(video.shape[0]):
                 worms_t = worms[t].copy()
                 worms_t[labels != l] = 0
                 num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(worms_t, connectivity=8)
-                label_counts.append(num_labels_t - 1)
+                areas = stats_t[:, cv2.CC_STAT_AREA]
+                is_valid = (areas >= min_worm_area)
+                is_valid[0] = False
+                label_counts.append(np.sum(is_valid))
                 if return_vis and np.max(label_counts) > 0:
                     vis[t, labels_t > 0] = 255
             label_count = np.max(label_counts)
@@ -164,7 +162,7 @@ def count_video(
             n_stationary_alive += 1
 
     if return_vis:
-        vis[(vis != 255) & (alive_stationary > 0)] = 200
+        vis[(vis != 255) & (alive_stationary > 0)] = 255
         video = vis
 
     return n_roaming, n_stationary_alive, video
