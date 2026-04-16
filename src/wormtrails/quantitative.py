@@ -4,28 +4,31 @@ import pandas as pd
 
 def count_video(
     video_array,
-    min_worm_area=10,
+    min_worm_area=20,
     max_worm_area=300,
+    max_worm_length=30,
     worm_kernel_size=11,
-    worm_thresh=3,
-    motion_thresh=2,
-    strict_motion_thresh=3,
+    worm_thresh=5,
+    motion_thresh=3,
+    strict_motion_thresh=4,
     strict_motion_dilation=1,
     contrast_motion_correction_factor=50,
     edge_contrast_kernel_size=51,
-    edge_contrast_thresh=1,
+    edge_contrast_thresh=10,
     mask_inclusion_kernel_size=31,
     edge_offset=3,
     return_vis=True
 ):
     # currently fixed parameters:
     small_kernel_size = 3
+    worm_dilation_kernel_size = 5
 
     # load video
     video = video_array.copy()
 
     # create kernels which we'll use throughout the pipeline
     small_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (small_kernel_size, small_kernel_size))
+    worm_dilation_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (worm_dilation_kernel_size, worm_dilation_kernel_size))
     mask_inclusion_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (mask_inclusion_kernel_size, mask_inclusion_kernel_size))
 
     # get max intensity projection and motion array
@@ -45,28 +48,16 @@ def count_video(
     motion_proj[motion_proj < 0] = 0
     motion_proj = motion_proj.astype(np.uint8)
 
-    # find living worms which will be used for counting the number of worms in trails
-    worms = np.zeros_like(video, dtype=np.uint8)
-    for t in range(worms.shape[0]):
-        potential_worms = cv2.adaptiveThreshold(
-            video[t].copy(),
-            255,
-            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-            cv2.THRESH_BINARY_INV,
-            worm_kernel_size,
-            worm_thresh
-        )
-        motion_frame = np.abs(background.copy().astype(np.int16) - video[t].copy().astype(np.int16)).astype(np.float64)
-        motion_frame -= grad / contrast_motion_correction_factor
-        motion_frame[motion_frame < 0] = 0
-
-        num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(potential_worms, connectivity=8)
-        moving_labels_t = np.unique(labels_t[motion_frame > motion_thresh])
-        is_moving = np.isin(np.arange(num_labels_t), moving_labels_t)
-        areas = stats_t[:, cv2.CC_STAT_AREA]
-        is_valid = (areas >= min_worm_area) & (areas <= max_worm_area) & is_moving
-        is_valid[0] = False
-        worms[t, is_valid[labels_t]] = 255
+    problematic_pixels = background.copy()
+    problematic_pixels = cv2.adaptiveThreshold(
+        problematic_pixels,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        worm_kernel_size,
+        worm_thresh
+    )
+    problematic_pixels[motion_proj <= motion_thresh] = 0
 
     # get stationary objects
     stationary = median_proj.copy()
@@ -95,7 +86,6 @@ def count_video(
     plate_mask[plate_mask < 255] = 0
     plate_mask = cv2.morphologyEx(plate_mask, cv2.MORPH_CLOSE, mask_inclusion_kernel)
     plate_mask = cv2.erode(plate_mask, small_kernel, iterations=edge_offset)
-    worms[:, plate_mask == 0] = 0
     motion_proj[plate_mask == 0] = 0
     stationary[plate_mask == 0] = 0
 
@@ -114,6 +104,50 @@ def count_video(
     stationary[motion_mask > 0] = 255
     motion_mask[plate_mask == 0] = 0
     strict_motion_mask[plate_mask == 0] = 0
+
+    # find living worms which will be used for counting the number of worms in trails
+    worms = np.zeros_like(video, dtype=np.uint8)
+    for t in range(worms.shape[0]):
+        potential_worms = cv2.adaptiveThreshold(
+            video[t].copy(),
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            worm_kernel_size,
+            worm_thresh
+        )
+        motion_frame = np.abs(background.copy().astype(np.int16) - video[t].copy().astype(np.int16)).astype(np.float64)
+        motion_frame -= grad / contrast_motion_correction_factor
+
+        num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(potential_worms, connectivity=8)
+        moving_labels_t = np.unique(labels_t[motion_frame > motion_thresh])
+        is_moving = np.isin(np.arange(num_labels_t), moving_labels_t)
+        is_fully_moving = ~np.isin(np.arange(num_labels_t), np.unique(labels_t[motion_frame <= motion_thresh]))
+        problematic_labels_t = np.unique(labels_t[problematic_pixels > 0])
+        is_problematic = np.isin(np.arange(num_labels_t), problematic_labels_t)
+        areas = stats_t[:, cv2.CC_STAT_AREA]
+        # first, find worms which are above the minimum area and moving
+        is_valid = (areas >= min_worm_area) & is_moving & (areas <= max_worm_area) & (~is_problematic | is_fully_moving)
+        is_valid[0] = False
+        worms[t, is_valid[labels_t]] = 255
+
+
+        # recalculate the motion frame with median projection since worms may be brighter than the background in dark regions
+        motion_frame_median = np.abs(median_proj.copy().astype(np.int16) - video[t].copy().astype(np.int16)).astype(np.float64)
+        motion_frame_median -= grad / contrast_motion_correction_factor
+        is_moving_median = np.isin(np.arange(num_labels_t), np.unique(labels_t[motion_frame_median > motion_thresh]))
+        # of the valid worms, check whether they are problematic and not fully moving
+        is_fallback = (areas >= min_worm_area) & is_moving_median & is_problematic & ~is_fully_moving
+        is_fallback[0] = False
+        # if they are problematic and not fully moving, add their associated motion pixels to a separate frame
+        fallback_motion = (motion_frame_median > strict_motion_thresh) & is_fallback[labels_t]
+        fallback_motion = fallback_motion.astype(np.uint8)
+        # dilate the problematic/large worm motion pixels by the half the maximum length of a worm and add them to the worms frame
+        for i in range(int(max_worm_length/(worm_dilation_kernel_size-1))):
+            fallback_motion = cv2.dilate(fallback_motion, worm_dilation_kernel)
+            fallback_motion[motion_mask == 0] = 0
+        worms[t, fallback_motion > 0] = 255
+    worms[:, plate_mask == 0] = 0
 
     # loop through trails and find the number of worms in each one
     num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(motion_mask, connectivity=8)
@@ -134,7 +168,7 @@ def count_video(
                 is_valid[0] = False
                 label_counts.append(np.sum(is_valid))
                 if return_vis and np.max(label_counts) > 0:
-                    vis[t, labels_t > 0] = 255
+                    vis[t, is_valid[labels_t]] = 255
             label_count = np.max(label_counts)
             n_roaming += label_count
             if label_count > 0:
