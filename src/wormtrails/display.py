@@ -5,7 +5,7 @@ from .processing import create_time_encoded_frame
 def show_video_array(video_array):
     """
     Displays a video array in a window with a trackbar to scroll through frames.
-    Press ESC to exit the window.
+    Press ESC or close the window to exit.
 
     Args:
         video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
@@ -15,7 +15,7 @@ def show_video_array(video_array):
 
     Notes:
         - Uses OpenCV's imshow and createTrackbar for frame navigation
-        - Press ESC key to close the window and destroy OpenCV objects
+        - Press ESC key or close the window to exit
     """
     
     num_frames = video_array.shape[0]
@@ -32,7 +32,7 @@ def show_video_array(video_array):
     # Show the first frame initially
     cv2.imshow('esc to exit', video_array[0])
 
-    while True:
+    while cv2.getWindowProperty('esc to exit', cv2.WND_PROP_VISIBLE) > 0:
         key = cv2.waitKey(1) & 0xFF
         if key == 27:  # ESC key to exit
             break
@@ -42,7 +42,7 @@ def show_video_array(video_array):
 def show_frame(frame):
     """
     Displays a single frame in a window.
-    Press ESC to exit the window.
+    Press ESC or close the window to exit.
 
     Args:
         frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing a single frame.
@@ -52,13 +52,13 @@ def show_frame(frame):
 
     Notes:
         - Uses OpenCV's imshow for single frame display
-        - Press ESC key to close the window and destroy OpenCV objects
+        - Press ESC key or close the window to exit
     """
     
     cv2.namedWindow('esc to exit', cv2.WINDOW_NORMAL)
     cv2.imshow('esc to exit', frame)
     
-    while True:
+    while cv2.getWindowProperty('esc to exit', cv2.WND_PROP_VISIBLE) > 0:
         key = cv2.waitKey(1) & 0xFF
         if key == 27:  # ESC key to exit
             break
@@ -68,7 +68,7 @@ def show_frame(frame):
 def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, scale_factor=1, offset=0, light_background=True):
     """
     Displays a time-encoded video array in a window with a trackbar to scroll through frames.
-    Press ESC to exit the window.
+    Press ESC or close the window to exit.
     Projects along the time axis of the average subtracted array within a local frame window of the specified size to create frames with trails.
     Shorter windows make intuitive speed by trail length easier to see and work better for scans of densely populated plates.
     Longer windows are better for seeing behavioral movement patterns, as long as the plate isn't too densely populated.
@@ -97,7 +97,7 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
     # Show the first frame initially
     cv2.imshow('esc to exit', average_subtracted_array[0])
 
-    while True:
+    while cv2.getWindowProperty('esc to exit', cv2.WND_PROP_VISIBLE) > 0:
         key = cv2.waitKey(1) & 0xFF
         if key == 27:  # ESC key to exit
             break

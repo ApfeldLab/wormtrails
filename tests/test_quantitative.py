@@ -32,14 +32,19 @@ class TestQuantitative(unittest.TestCase):
         video = self.get_test_video("lifespan_plate.avi")
         n_roaming, n_quiescent, vis = count_video(
             video,
-            min_worm_area=10,
-            max_worm_area=200,
-            motion_thresh=2,
-            strict_motion_thresh=3,
-            max_stationary_worm_length=30,
-            stationary_thresh_offset=4,
-            edge_contrast_loDiff=2,
-            edge_offset=3,
+            min_worm_area=20,
+            max_worm_area=300,
+            max_worm_length=30,
+            worm_kernel_size=11,
+            worm_thresh=5,
+            motion_thresh=3,
+            strict_motion_thresh=4,
+            strict_motion_dilation=1,
+            contrast_motion_correction_factor=50,
+            edge_contrast_kernel_size=51,
+            edge_contrast_thresh=4,
+            mask_inclusion_kernel_size=31,
+            edge_offset=0,
             return_vis=False
         )
         count = int(n_roaming + n_quiescent)
@@ -52,14 +57,19 @@ class TestQuantitative(unittest.TestCase):
         video = self.get_test_video("dying_plate.avi")
         n_roaming, n_quiescent, vis = count_video(
             video,
-            min_worm_area=10,
-            max_worm_area=200,
-            motion_thresh=2,
-            strict_motion_thresh=3,
-            max_stationary_worm_length=30,
-            stationary_thresh_offset=4,
-            edge_contrast_loDiff=2,
-            edge_offset=3,
+            min_worm_area=20,
+            max_worm_area=300,
+            max_worm_length=30,
+            worm_kernel_size=11,
+            worm_thresh=5,
+            motion_thresh=3,
+            strict_motion_thresh=4,
+            strict_motion_dilation=1,
+            contrast_motion_correction_factor=50,
+            edge_contrast_kernel_size=51,
+            edge_contrast_thresh=4,
+            mask_inclusion_kernel_size=31,
+            edge_offset=0,
             return_vis=False
         )
         count = int(n_roaming + n_quiescent)
