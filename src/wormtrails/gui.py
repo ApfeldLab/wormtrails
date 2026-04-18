@@ -86,8 +86,7 @@ class WormtrailsGUI(tk.Tk):
         corrected = wts.correct_vignetting(video)
         motion = wts.subtract_average(corrected)
         # Using a simple colormap for default
-        from wormtrails.src.colormaps import blue_to_red
-        trails = wts.create_time_encoded_array(motion, colormap=blue_to_red, window=20)
+        trails = wts.create_time_encoded_array(motion, colormap=wts.blue_to_red, window=20)
         wts.show_time_encoding(trails)
 
     # --- Count Tab Setup ---
@@ -120,8 +119,13 @@ class WormtrailsGUI(tk.Tk):
         
         try:
             video = wts.read_video_file(self.video_path.get())
-            count = wts.count_video(video, min_size=self.count_min.get(), max_size=self.count_max.get())
-            gui_update(f"Detected Objects: {count}")
+            n_roaming, n_stationary, vis = wts.count_video(
+                video,
+                min_worm_area=self.count_min.get(),
+                max_worm_area=self.count_max.get(),
+                return_vis=False,
+            )
+            gui_update(f"Roaming: {n_roaming}  Stationary: {n_stationary}")
         except Exception as e:
             gui_update(f"Error: {e}")
             raise e
@@ -163,8 +167,8 @@ class WormtrailsGUI(tk.Tk):
     def _do_chemo(self):
         video = wts.read_video_file(self.video_path.get())
         corrected = wts.correct_vignetting(video)
-        
-        binary = wts.threshold_array(corrected, threshold=120, dark_objects=True)
+        motion = wts.subtract_average(corrected, use_absolute_difference=True)
+        binary = cv2.threshold(motion, 30, 255, cv2.THRESH_BINARY)[1]
         
         test_spot = None
         bx = self.chemo_bait_x.get()
