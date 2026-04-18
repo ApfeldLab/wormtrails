@@ -76,7 +76,7 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
     
     Args:
         average_subtracted_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the average subtracted video frames, with time as axis 0.
-        colormap: Numpy array of shape (N, 3) containing the colormap colors (R, G, B values 0-255), applied to each trail frame.
+        colormap: Numpy array of shape (N, 3) containing the colormap colors (B, G, R values 0-255), applied to each trail frame.
         window: Integer value for the window size (number of frames to look back) used to create trails. Shorter windows take less processing time.
         scale_factor: Float value for the scaling factor, applied to trails to adjust brightness. Higher values increase contrast.
         offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise.

@@ -12,14 +12,10 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=False, inPlace=F
     Args:
         array: 2D or 3D Numpy array containing the video frames. If 3D, time is axis 0. For 2D arrays, only vignetting correction (no brightness adjustment) is applied.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame. If None (default), the kernel size is calculated as one quarter the image width, rounded up and made odd.
-        inPlace: Boolean value. If True, modifies the original array in place and returns it. If False (default), creates a copy and returns the copy.
-        use_median_blur: Boolean value. If True, uses median blur instead of Gaussian blur for the vignetting correction. Median blur is more robust to salt-and-pepper noise.
+        inPlace: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
 
     Returns:
-        video_array: 2D or 3D Numpy array of 8 bit unsigned integers (uint8) containing the corrected video frames.
-
-    Raises:
-        ValueError: If kernel_size is not provided and cannot be calculated from the array dimensions.
+        video_array: 2D or 3D Numpy array of 8 bit unsigned integers (uint8) containing the corrected video frames. Returns None if inPlace=True.
     """
     if not inPlace:
         array = array.copy()
@@ -73,13 +69,10 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
         use_absolute_difference: Boolean value. If True, uses absolute difference between scaled frames and average, making motion symmetric. If False, uses one-sided subtraction based on light_background.
         use_projection: Boolean value. If True, uses a min/max projection instead of mean for the average frame, which is useful when stationary background elements need to be preserved.
         light_background: Boolean value. If True, assumes dark worms on light background and uses inverted subtraction. If False, assumes bright objects on dark background.
-        inPlace: Boolean value. If True, modifies the original array in place and returns it. If False (default), creates a copy and returns the copy.
+        inPlace: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
 
     Returns:
-        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the subtracted video frames with only motion visible, with time as axis 0.
-
-    Raises:
-        ValueError: If video_array is not a 3D array with time as axis 0.
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the subtracted video frames with only motion visible, with time as axis 0. Returns None if inPlace=True.
     """
     if not inPlace:
         video_array = video_array.copy()
@@ -150,7 +143,7 @@ def create_time_encoded_array(average_subtracted_array, colormap=np.array([[0,0,
     
     Args:
         average_subtracted_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the average subtracted video frames, with time as axis 0.
-        colormap: Numpy array of shape (N, 3) containing the colormap colors (R, G, B values 0-255), applied to each trail frame to encode temporal information.
+        colormap: Numpy array of shape (N, 3) containing the colormap colors (B, G, R values 0-255), applied to each trail frame to encode temporal information.
         window: Integer value for the window size (number of frames to look back) used to create trails. Shorter windows take less processing time and enhance speed perception.
         scale_factor: Float value for the scaling factor, applied to the trails to adjust brightness. Higher values increase contrast. Default is 1.
         offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
@@ -179,7 +172,7 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
     
     Args:
         average_subtracted_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the average subtracted video frames, with time as axis 0.
-        colormap: Numpy array of shape (N, 3) containing the colormap colors (R, G, B values 0-255), applied to the trail frame with color values being applied in order scaled to the window size.
+        colormap: Numpy array of shape (N, 3) containing the colormap colors (B, G, R values 0-255), applied to the trail frame with color values being applied in order scaled to the window size.
         window: Integer value for the window size (number of frames to look back), used to create trails. Shorter windows take less processing time.
         start_time: Integer value for the start time of the frame. The window starts at this frame and continues forward for the specified window size.
         scale_factor: Float value for the scaling factor, applied to the trails to adjust brightness. Higher values increase contrast. Default is 1.
@@ -256,6 +249,24 @@ def add_timestamp(video_array, black_background=True, font_scale=1, font_thickne
         return video_array
 
 def align_frames(ref, target):
+    """
+    Aligns the target frame to the reference frame using ORB feature detection and homography estimation.
+    
+    Args:
+        ref: 2D Numpy array of 8 bit unsigned integers (uint8) containing the reference frame.
+        target: 2D Numpy array of 8 bit unsigned integers (uint8) containing the target frame to align.
+
+    Returns:
+        aligned: 2D Numpy array of 8 bit unsigned integers (uint8) containing the target frame warped to match the reference frame geometry.
+
+    Raises:
+        ValueError: If features cannot be detected in either frame, fewer than 15 good matches are found, or homography cannot be computed.
+
+    Notes:
+        Uses ORB feature detection with BFMatcher k-NN and Lowe's ratio test.
+        Requires at least 15 good matches or raises ValueError.
+        Prints diagnostic info (match count, inliers, homography matrix, rotation, translation, scale).
+    """
     orb = cv2.ORB_create(nfeatures=5000)
 
     kp1, des1 = orb.detectAndCompute(ref, None)

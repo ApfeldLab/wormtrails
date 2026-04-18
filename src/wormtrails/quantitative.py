@@ -19,6 +19,36 @@ def count_video(
     edge_offset=3,
     return_vis=True
 ):
+    """
+    Counts roaming and stationary living worms in a video using motion detection and connected components analysis.
+    
+    Args:
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
+        min_worm_area: Minimum pixel area in 2D projection to count a worm. Default is 20.
+        max_worm_area: Maximum pixel area in 2D projection to count a worm. Default is 300.
+        max_worm_length: Maximum expected worm length in pixels, used for dilation of problematic worm motion. Default is 30.
+        worm_kernel_size: Kernel size for adaptive thresholding to detect worm bodies. Default is 11.
+        worm_thresh: Threshold offset for adaptive thresholding. Default is 5.
+        motion_thresh: Minimum motion intensity to consider a region as moving. Default is 3.
+        strict_motion_thresh: Higher motion threshold for strict motion detection with problematic or stationary worms. Default is 4.
+        strict_motion_dilation: Kernel iterations for dilating the strict motion mask. Default is 1.
+        contrast_motion_correction_factor: Factor to subtract gradient-based false motion at high-contrast edges. Default is 50.
+        edge_contrast_kernel_size: Kernel size for edge contrast detection. Default is 51.
+        edge_contrast_thresh: Threshold for edge contrast detection. Default is 10.
+        mask_inclusion_kernel_size: Kernel size for plate mask morphological closing. Default is 31.
+        edge_offset: Number of erosion iterations on the plate mask edge. Default is 3.
+        return_vis: If True, returns a visualization array with detected worms highlighted. If False, returns the original video copy. Default is True.
+
+    Returns:
+        n_roaming: Integer count of roaming (moving) worms detected across all frames.
+        n_stationary_alive: Integer count of stationary but alive worms detected.
+        vis: Visualization array with detected worms highlighted (255 for roaming, 128 for stationary).
+
+    Notes:
+        Prints per-label progress to stdout during processing — noisy for long videos.
+        Worms are classified as roaming if they show motion above threshold, stationary if they do not.
+        Plate edge regions are masked out to avoid false detections.
+    """
     # currently fixed parameters:
     small_kernel_size = 3
     worm_dilation_kernel_size = 5
