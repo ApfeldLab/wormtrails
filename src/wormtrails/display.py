@@ -2,10 +2,10 @@ import cv2
 import numpy as np
 from .processing import create_time_encoded_frame
 
-def show_video_array(video_array):
+def show_video_array(video_array, window_name='esc to exit'):
     """
     Displays a video array in a window with a trackbar to scroll through frames.
-    Press ESC or close the window to exit.
+    Close the window to exit.
 
     Args:
         video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
@@ -15,34 +15,55 @@ def show_video_array(video_array):
 
     Notes:
         - Uses OpenCV's imshow and createTrackbar for frame navigation
-        - Press ESC key or close the window to exit
+        - Close the window to exit
     """
     
     num_frames = video_array.shape[0]
+    if num_frames == 0:
+        print("Warning: Empty video array.")
+        return
 
-    # Callback function for trackbar (does nothing but required by OpenCV)
-    def on_trackbar(val):
-        frame = video_array[val]
-        cv2.imshow('esc to exit', frame)
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.createTrackbar('Frame', window_name, 0, num_frames - 1, lambda x: None)
 
-    # Create a window and trackbar
-    cv2.namedWindow('esc to exit', cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', 'esc to exit', 0, num_frames - 1, on_trackbar)
+    # stop and reinitialize because otherwise there are errors if closing via GUI on first run
+    cv2.waitKey(1)
+    cv2.destroyAllWindows()
+    cv2.waitKey(1)
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.createTrackbar('Frame', window_name, 0, num_frames - 1, lambda x: None)
+    
+    while True:
+        current_idx = cv2.getTrackbarPos('Frame', window_name)
+        frame = video_array[current_idx]
 
-    # Show the first frame initially
-    cv2.imshow('esc to exit', video_array[0])
+        if frame.dtype in (np.float32, np.float64):
+            frame = np.clip(frame, 0, 255).astype(np.uint8)
 
-    while cv2.getWindowProperty('esc to exit', cv2.WND_PROP_VISIBLE) > 0:
+        cv2.imshow(window_name, frame)
+        
+        # 1. Primary exit: ESC or 'q' (most reliable across all environments)
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:  # ESC key to exit
+        if key in (27, ord('q')):
             break
 
+        # 2. Secondary exit: Window 'X' button (with explicit cleanup)
+        try:
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                break
+        except cv2.error:
+            # Explicitly destroy to prevent QT backend from keeping it alive
+            cv2.destroyWindow(window_name)
+            break
+
+    # Flush remaining events and clean up
+    cv2.waitKey(1)
     cv2.destroyAllWindows()
 
-def show_frame(frame):
+def show_frame(frame, window_name='esc to exit'):
     """
     Displays a single frame in a window.
-    Press ESC or close the window to exit.
+    Close the window to exit.
 
     Args:
         frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing a single frame.
@@ -52,23 +73,35 @@ def show_frame(frame):
 
     Notes:
         - Uses OpenCV's imshow for single frame display
-        - Press ESC key or close the window to exit
+        - Close the window to exit
     """
     
-    cv2.namedWindow('esc to exit', cv2.WINDOW_NORMAL)
-    cv2.imshow('esc to exit', frame)
+    # stop and reinitialize because otherwise there are errors if closing via GUI on first run
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.waitKey(1)
+    cv2.destroyAllWindows()
+    cv2.waitKey(1)
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.waitKey(1)
+    cv2.imshow(window_name, frame)
     
-    while cv2.getWindowProperty('esc to exit', cv2.WND_PROP_VISIBLE) > 0:
+    while True:
+        try:
+            visible = cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE)
+            if visible <= 0:
+                break
+        except cv2.error:
+            break
         key = cv2.waitKey(1) & 0xFF
         if key == 27:  # ESC key to exit
             break
 
-    cv2.destroyAllWindows()
+    cv2.destroyWindow(window_name)
 
-def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, scale_factor=1, offset=0, light_background=True):
+def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), window=1, scale_factor=1, offset=0, light_background=True, window_name='esc to exit'):
     """
     Displays a time-encoded video array in a window with a trackbar to scroll through frames.
-    Press ESC or close the window to exit.
+    Close the window to exit.
     Projects along the time axis of the average subtracted array within a local frame window of the specified size to create frames with trails.
     Shorter windows make intuitive speed by trail length easier to see and work better for scans of densely populated plates.
     Longer windows are better for seeing behavioral movement patterns, as long as the plate isn't too densely populated.
@@ -84,22 +117,43 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
     """
     
     num_frames = average_subtracted_array.shape[0]
+    if num_frames == 0:
+        print("Warning: Empty video array.")
+        return
 
-    # Callback function for trackbar (does nothing but required by OpenCV)
-    def on_trackbar(val):
-        frame = create_time_encoded_frame(average_subtracted_array, colormap=colormap, window=window, start_time=val, scale_factor=scale_factor, offset=offset, light_background=light_background)
-        cv2.imshow('esc to exit', frame)
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.createTrackbar('Frame', window_name, 0, num_frames - 1, lambda x: None)
 
-    # Create a window and trackbar
-    cv2.namedWindow('esc to exit', cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', 'esc to exit', 0, num_frames - 1 - window, on_trackbar)
+    # stop and reinitialize because otherwise there are errors if closing via GUI on first run
+    cv2.waitKey(1)
+    cv2.destroyAllWindows()
+    cv2.waitKey(1)
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.createTrackbar('Frame', window_name, 0, num_frames - 1, lambda x: None)
+    
+    while True:
+        current_idx = cv2.getTrackbarPos('Frame', window_name)
+        frame = frame = create_time_encoded_frame(average_subtracted_array, colormap=colormap, window=window, start_time=current_idx, scale_factor=scale_factor, offset=offset, light_background=light_background)
 
-    # Show the first frame initially
-    cv2.imshow('esc to exit', average_subtracted_array[0])
+        if frame.dtype in (np.float32, np.float64):
+            frame = np.clip(frame, 0, 255).astype(np.uint8)
 
-    while cv2.getWindowProperty('esc to exit', cv2.WND_PROP_VISIBLE) > 0:
+        cv2.imshow(window_name, frame)
+        
+        # 1. Primary exit: ESC or 'q' (most reliable across all environments)
         key = cv2.waitKey(1) & 0xFF
-        if key == 27:  # ESC key to exit
+        if key in (27, ord('q')):
             break
 
+        # 2. Secondary exit: Window 'X' button (with explicit cleanup)
+        try:
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                break
+        except cv2.error:
+            # Explicitly destroy to prevent QT backend from keeping it alive
+            cv2.destroyWindow(window_name)
+            break
+
+    # Flush remaining events and clean up
+    cv2.waitKey(1)
     cv2.destroyAllWindows()
