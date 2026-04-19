@@ -180,13 +180,15 @@ class WormtrailsGUI(tk.Tk):
         self._te_window = tk.StringVar(value="20")
         self._te_scale = tk.StringVar(value="1")
         self._te_offset = tk.StringVar(value="0")
+        self._te_start_frame = tk.StringVar(value="0")
         self._te_light = tk.BooleanVar(value=True)
         te.add_combobox("Colormap:", self._te_colormap,
                         ["blue_to_red", "white_to_black", "black_to_white", "banded_blue_to_red", "dark_separated_blue_to_red"], row=0)
         te.add_label_entry("Window:", self._te_window, row=1)
         te.add_label_entry("Scale Factor:", self._te_scale, row=2)
         te.add_label_entry("Offset:", self._te_offset, row=3)
-        te.add_checkbutton("Light Background", self._te_light, row=4)
+        te.add_label_entry("Start Frame:", self._te_start_frame, row=4)
+        te.add_checkbutton("Light Background", self._te_light, row=5)
         te.pack(fill='x', padx=6, pady=2)
 
         # Track array params
@@ -249,7 +251,7 @@ class WormtrailsGUI(tk.Tk):
 
     def _do_show_video(self):
         video = wts.read_video_file(self.video_path.get())
-        wts.show_video_array(video)
+        self.after(0, lambda v=video: wts.show_video_array(v))
 
     def _do_preview_time_encoding(self):
         video = wts.read_video_file(self.video_path.get())
@@ -258,7 +260,9 @@ class WormtrailsGUI(tk.Tk):
         sub = self._get_sub_params()
         self._motion = wts.subtract_average(corrected, **sub)
         self._te_params = self._get_te_params()
-        wts.show_time_encoding(self._motion, **self._te_params)
+        motion = self._motion
+        te_params = self._te_params
+        self.after(0, lambda m=motion, p=te_params: wts.show_time_encoding(m, **p))
 
     def _do_save_frame(self):
         if self._motion is None:
@@ -271,11 +275,12 @@ class WormtrailsGUI(tk.Tk):
         )
         if not path:
             return
+        start_frame = _safe_int(self._te_start_frame.get(), 0)
         frame = create_time_encoded_frame(
             self._motion,
             colormap=self._te_params['colormap'],
             window=self._te_params['window'],
-            start_time=0,
+            start_time=start_frame,
             scale_factor=self._te_params['scale_factor'],
             offset=self._te_params['offset'],
             light_background=self._te_params['light_background'],
@@ -315,7 +320,7 @@ class WormtrailsGUI(tk.Tk):
         motion = wts.subtract_average(corrected, **sub)
         window = _safe_int(self._tr_window.get(), 20)
         tracks = wts.create_track_array(motion, window=window)
-        wts.show_video_array(tracks)
+        self.after(0, lambda t=tracks: wts.show_video_array(t))
 
     # --- Count Tab Setup ---
     def setup_count_tab(self):

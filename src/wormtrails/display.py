@@ -122,14 +122,14 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
         return
 
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 0, num_frames - 1, lambda x: None)
+    cv2.createTrackbar('Frame', window_name, 0, num_frames - window, lambda x: None)
 
     # stop and reinitialize because otherwise there are errors if closing via GUI on first run
     cv2.waitKey(1)
     cv2.destroyAllWindows()
     cv2.waitKey(1)
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 0, num_frames - 1, lambda x: None)
+    cv2.createTrackbar('Frame', window_name, 0, num_frames - window, lambda x: None)
     
     while True:
         current_idx = cv2.getTrackbarPos('Frame', window_name)
