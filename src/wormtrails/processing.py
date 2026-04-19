@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import math
 
-def correct_vignetting(array, kernel_size=None, use_median_blur=False, inPlace=False):
+def correct_vignetting(array, kernel_size=None, use_median_blur=True, inPlace=False):
     """
     Corrects vignetting in a video array by normalizing each frame to have the same brightness as the average frame and dividing by a blur of the average frame.
     If a single frame (2D array) is provided, the frame brightness adjustment step is skipped since no normalization is needed.
@@ -12,6 +12,7 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=False, inPlace=F
     Args:
         array: 2D or 3D Numpy array containing the video frames. If 3D, time is axis 0. For 2D arrays, only vignetting correction (no brightness adjustment) is applied.
         kernel_size: Odd integer value for the kernel size used to create the blur of the average frame. If None (default), the kernel size is calculated as one quarter the image width, rounded up and made odd.
+        use_median_blur: Boolean value. If True (default), uses a median filter to create the blurred frame for background brightness estimation. If False, uses Gaussian blur.
         inPlace: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
 
     Returns:
