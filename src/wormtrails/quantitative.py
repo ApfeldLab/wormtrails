@@ -187,7 +187,8 @@ def count_video(
         vis[:, motion_proj > motion_thresh] = 0
     for l in range(1, num_labels):
         trail_area = stats[l, cv2.CC_STAT_AREA]
-        if trail_area > min_worm_area:
+        # a worm may be roaming if it's trail is larger than the maximum worm area, or if it is smaller than the maximum worm area but not overlapping with any problematic pixels
+        if trail_area > max_worm_area or (trail_area > min_worm_area and np.max(problematic_pixels[labels==l]) == 0):
             label_counts = []
             for t in range(video.shape[0]):
                 worms_t = worms[t].copy()
