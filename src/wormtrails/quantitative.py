@@ -12,6 +12,7 @@ def count_video(
     motion_thresh=3,
     strict_motion_thresh=4,
     strict_motion_dilation=1,
+    stationary_dilation=1,
     contrast_motion_correction_factor=50,
     edge_contrast_kernel_size=51,
     edge_contrast_thresh=10,
@@ -32,6 +33,7 @@ def count_video(
         motion_thresh: Minimum motion intensity to consider a region as moving. Default is 3.
         strict_motion_thresh: Higher motion threshold for strict motion detection with problematic or stationary worms. Default is 4.
         strict_motion_dilation: Kernel iterations for dilating the strict motion mask. Default is 1.
+        stationary_dilation: Kernel iterations for dilating the stationary mask. Default is 1.
         contrast_motion_correction_factor: Factor to subtract gradient-based false motion at high-contrast edges. Default is 50.
         edge_contrast_kernel_size: Kernel size for edge contrast detection. Default is 51.
         edge_contrast_thresh: Threshold for edge contrast detection. Default is 10.
@@ -188,7 +190,7 @@ def count_video(
     for l in range(1, num_labels):
         trail_area = stats[l, cv2.CC_STAT_AREA]
         # a worm may be roaming if it's trail is larger than the maximum worm area, or if it is smaller than the maximum worm area but not overlapping with any problematic pixels
-        if trail_area > max_worm_area or (trail_area > min_worm_area and np.max(problematic_pixels[labels==l]) == 0):
+        if trail_area > max_worm_area/2 or (trail_area > min_worm_area and np.max(problematic_pixels[labels==l]) == 0):
             label_counts = []
             for t in range(video.shape[0]):
                 worms_t = worms[t].copy()
@@ -211,26 +213,27 @@ def count_video(
     print(" "*60, end="\r")
 
     # floodfill the stationary binary image from points in the motion mask
-    alive_stationary = np.zeros_like(stationary)
+    alive_stationary = np.zeros_like(stationary, dtype=np.uint8)
     num_labels_sw, labels_sw, stats_sw, _ = cv2.connectedComponentsWithStats(stationary, connectivity=8)
 
-    # Find labels in stationary that intersect with the motion_mask
+    # Find labels in stationary that intersect with the strict_motion_mask
     overlapping_labels = np.unique(labels_sw[cv2.dilate(strict_motion_mask, small_kernel, iterations=strict_motion_dilation) > 0])
-    # TODO: if a label is larger than max_stationary_worm_length, either split it into small enough regions or only fill regions up to max_stationary_worm_length
-    n_stationary_alive = 0
     for label_idx in overlapping_labels:
         area = stats_sw[label_idx, cv2.CC_STAT_AREA]
-        if label_idx == 0: 
+        if label_idx == 0:
             continue
         elif area >= min_worm_area and area <= max_worm_area:
             alive_stationary[labels_sw == label_idx] = 255
-            n_stationary_alive += 1
+    alive_stationary = cv2.dilate(alive_stationary, small_kernel, iterations=stationary_dilation)
+
+    n_quiescent, _, _, _ = cv2.connectedComponentsWithStats(alive_stationary, connectivity=8)
+    n_quiescent -= 1 # remove the background label 0
 
     if return_vis:
         vis[(vis != 255) & (alive_stationary > 0)] = 255
         video = vis
 
-    return n_roaming, n_stationary_alive, video
+    return n_roaming, n_quiescent, video
 
 def calculate_relative_metrics(position, direction, test_spot):
     """
