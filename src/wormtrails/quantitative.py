@@ -224,6 +224,8 @@ def count_video(
             continue
         elif area >= min_worm_area and area <= max_worm_area:
             alive_stationary[labels_sw == label_idx] = 255
+        elif area > max_worm_area:
+            alive_stationary[(motion_mask > 0) & (labels_sw == label_idx)] = 255
     alive_stationary = cv2.dilate(alive_stationary, small_kernel, iterations=stationary_dilation)
 
     n_quiescent, _, _, _ = cv2.connectedComponentsWithStats(alive_stationary, connectivity=8)
