@@ -157,3 +157,100 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
     # Flush remaining events and clean up
     cv2.waitKey(1)
     cv2.destroyAllWindows()
+
+def count_assist(video_array, window_name='count assist'):
+    """
+    Displays a video overlaid with motion trails, allowing the user to mark worms 
+    by double-clicking. Use the backspace key to undo a marker.
+    
+    Args:
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames.
+        window_name: Title of the display window (e.g., file name).
+        
+    Returns:
+        markers: List of (x, y) coordinate tuples for marked worms.
+    """
+    num_frames = video_array.shape[0]
+    if num_frames == 0:
+        print("Warning: Empty video array.")
+        return
+
+    # Calculate the motion overlay
+    overlay_video = []
+    for i in range(2, num_frames):
+        motion = np.max(video_array[:i], axis=0) - np.min(video_array[:i], axis=0)
+        motion[motion < 3] = 1
+        log_motion = np.log2(motion.astype(np.float64))
+        log_motion *= 255 / np.max(log_motion)
+        log_motion = np.clip(log_motion, 0, 255).astype(np.uint8)
+        overlay_video.append(video_array[i] // 2 + log_motion // 2)
+
+    markers = []
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.createTrackbar('Frame', window_name, 0, num_frames - 3, lambda x: None)
+
+    # Initialize window properly
+    cv2.waitKey(1)
+    cv2.destroyAllWindows()
+    cv2.waitKey(1)
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.createTrackbar('Frame', window_name, 0, num_frames - 3, lambda x: None)
+
+    state = {'current_idx': 0, 'needs_redraw': True}
+
+    def mouse_callback(event, x, y, flags, param):
+        if event == cv2.EVENT_LBUTTONDBLCLK:
+            markers.append((x, y))
+            print(f"Total marked worms: {len(markers)}", end='\r')
+            state['needs_redraw'] = True
+
+    cv2.setMouseCallback(window_name, mouse_callback)
+
+    while True:
+        idx = cv2.getTrackbarPos('Frame', window_name)
+        if idx != state['current_idx']:
+            state['current_idx'] = idx
+            state['needs_redraw'] = True
+
+        if state['needs_redraw']:
+            frame = overlay_video[state['current_idx']]
+            if frame.dtype in (np.float32, np.float64):
+                frame = np.clip(frame, 0, 255).astype(np.uint8)
+            
+            # Convert to BGR to draw red dots
+            if len(frame.shape) == 2:
+                color_frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+            else:
+                color_frame = frame.copy()
+                
+            for (mx, my) in markers:
+                cv2.circle(color_frame, (mx, my), 3, (0, 0, 255), -1)
+
+            cv2.imshow(window_name, color_frame)
+            state['needs_redraw'] = False
+
+        key = cv2.waitKey(30) & 0xFF
+        
+        # Primary exit: ESC or 'q'
+        if key in (27, ord('q')):
+            break
+            
+        # Undo: Backspace (8) or Delete (127)
+        if key in (8, 127):
+            if markers:
+                markers.pop()
+                print(f"Total marked worms: {len(markers)}", end='\r')
+                state['needs_redraw'] = True
+
+        # Secondary exit: Window 'X' button
+        try:
+            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
+                break
+        except cv2.error:
+            cv2.destroyWindow(window_name)
+            break
+
+    cv2.waitKey(1)
+    cv2.destroyAllWindows()
+    return markers

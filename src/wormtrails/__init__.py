@@ -7,7 +7,8 @@ from wormtrails.file_io import (
 from wormtrails.display import (
     show_video_array,
     show_frame,
-    show_time_encoding
+    show_time_encoding,
+    count_assist
 )
 
 from wormtrails.processing import (

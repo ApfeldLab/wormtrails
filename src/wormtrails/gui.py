@@ -378,6 +378,8 @@ class WormtrailsGUI(tk.Tk):
         ttk.Label(result_frame, textvariable=self.count_result, font=('Arial', 13, 'bold'), foreground="blue").pack()
         ttk.Button(result_frame, text="Count Worms",
                    command=lambda: self.measure_action_wrapper(self._do_count, "Counting worms...")).pack(pady=4)
+        ttk.Button(result_frame, text="Count Assist (Manual)",
+                   command=lambda: self.measure_action_wrapper(self._do_count_assist, "Preparing Count Assist...")).pack(pady=4)
 
     def _get_count_params(self):
         return {
@@ -409,6 +411,16 @@ class WormtrailsGUI(tk.Tk):
 
         if self._count_vis.get():
             self.after(0, lambda: wts.show_video_array(vis))
+
+    def _do_count_assist(self):
+        video = wts.read_video_file(self.video_path.get())
+        import os
+        filename = os.path.basename(self.video_path.get())
+        def run():
+            markers = wts.count_assist(video, window_name=filename)
+            if markers is not None:
+                self.count_result.set(f"Manual Count: {len(markers)}")
+        self.after(0, run)
 
     # --- Chemotaxis Tab Setup ---
     def setup_chemotaxis_tab(self):
