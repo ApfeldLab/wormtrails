@@ -178,11 +178,12 @@ def count_assist(video_array, window_name='count assist'):
     # Calculate the motion overlay
     overlay_video = []
     for t in range(2, num_frames):
-        rss_t, _, _ = fit_pixel_linear_model(video_array[:t])
-        motion = rss_t/t
+        res_t, _, _ = fit_pixel_linear_model(video_array[:t])
+        motion = np.mean(res_t ** 2, axis=0)
         motion[motion < 1] = 1
         log_motion = np.log2(motion.astype(np.float64))
-        log_motion *= 255 / np.max(log_motion)
+        if np.max(log_motion) > 0:
+            log_motion *= 255 / np.max(log_motion)
         log_motion = np.clip(log_motion, 0, 255).astype(np.uint8)
         overlay_video.append(video_array[t] // 2 + log_motion // 2)
 

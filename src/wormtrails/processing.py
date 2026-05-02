@@ -123,8 +123,8 @@ def fit_pixel_linear_model(video: np.ndarray):
 
     Returns
     -------
-    rss : np.ndarray, shape (H, W)
-        Residual sum of squares for each pixel.
+    residuals : np.ndarray, shape (T, H, W)
+        Residuals for each pixel.
     slope : np.ndarray, shape (H, W)
     intercept : np.ndarray, shape (H, W)
     """
@@ -146,11 +146,9 @@ def fit_pixel_linear_model(video: np.ndarray):
 
     y_pred = X @ beta                     # (T, H*W)
     residuals = y_mat - y_pred
-    ss_res = np.sum(residuals ** 2, axis=0)  # (H*W,)
+    res = residuals.reshape(T, H, W)
 
-    rss = ss_res.reshape(H, W)
-
-    return rss, slope, intercept
+    return res, slope, intercept
 
 def create_track_array(average_subtracted_array, window):
     """
