@@ -13,6 +13,7 @@ from src.wormtrails.display import (
 from src.wormtrails.processing import (
     correct_vignetting,
     subtract_average,
+    fit_pixel_linear_model,
     create_track_array,
     create_time_encoded_array,
     create_time_encoded_frame,

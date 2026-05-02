@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from .processing import create_time_encoded_frame
+from .processing import create_time_encoded_frame, fit_pixel_linear_model
 
 def show_video_array(video_array, window_name='esc to exit'):
     """
@@ -177,13 +177,14 @@ def count_assist(video_array, window_name='count assist'):
 
     # Calculate the motion overlay
     overlay_video = []
-    for i in range(2, num_frames):
-        motion = np.max(video_array[:i], axis=0) - np.min(video_array[:i], axis=0)
-        motion[motion < 3] = 1
+    for t in range(2, num_frames):
+        rss_t, _, _ = fit_pixel_linear_model(video_array[:t])
+        motion = rss_t/t
+        motion[motion < 1] = 1
         log_motion = np.log2(motion.astype(np.float64))
         log_motion *= 255 / np.max(log_motion)
         log_motion = np.clip(log_motion, 0, 255).astype(np.uint8)
-        overlay_video.append(video_array[i] // 2 + log_motion // 2)
+        overlay_video.append(video_array[t] // 2 + log_motion // 2)
 
     markers = []
 

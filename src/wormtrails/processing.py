@@ -111,6 +111,47 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
     if not inPlace:
         return video_array
 
+def fit_pixel_linear_model(video: np.ndarray):
+    """
+    Fit a linear model to each pixel's intensity over time.
+
+    Returns residual sum of squares (RSS), slope, and intercept for each pixel.
+
+    Parameters
+    ----------
+    video : np.ndarray, shape (T, H, W)
+
+    Returns
+    -------
+    rss : np.ndarray, shape (H, W)
+        Residual sum of squares for each pixel.
+    slope : np.ndarray, shape (H, W)
+    intercept : np.ndarray, shape (H, W)
+    """
+    if video.ndim != 3:
+        raise ValueError("Input video must be a 3D array (T, H, W)")
+    T, H, W = video.shape
+    if T < 2:
+        raise ValueError("Need at least 2 frames to fit a linear model")
+
+    y_mat = video.reshape(T, -1)          # (T, H*W)
+    t = np.arange(T, dtype=float).reshape(-1, 1)
+    X = np.column_stack((t, np.ones(T)))  # (T, 2)
+
+    XTX_inv = np.linalg.inv(X.T @ X)
+    beta = XTX_inv @ X.T @ y_mat          # (2, H*W)
+
+    slope = beta[0].reshape(H, W)
+    intercept = beta[1].reshape(H, W)
+
+    y_pred = X @ beta                     # (T, H*W)
+    residuals = y_mat - y_pred
+    ss_res = np.sum(residuals ** 2, axis=0)  # (H*W,)
+
+    rss = ss_res.reshape(H, W)
+
+    return rss, slope, intercept
+
 def create_track_array(average_subtracted_array, window):
     """
     Projects along the time axis of the average subtracted array within a local frame window of the specified size to create frames with trails.
