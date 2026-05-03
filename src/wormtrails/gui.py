@@ -343,11 +343,10 @@ class WormtrailsGUI(tk.Tk):
         self._count_mwl = tk.StringVar(value="30")
         self._count_wks = tk.StringVar(value="11")
         self._count_wt = tk.StringVar(value="5")
-        self._count_mt = tk.StringVar(value="3")
-        self._count_smt = tk.StringVar(value="4")
+        self._count_mt = tk.StringVar(value="")  # empty = auto (None -> Otsu)
+        self._count_smt = tk.StringVar(value="")  # empty = auto
         self._count_smd = tk.StringVar(value="1")
         self._count_sd = tk.StringVar(value="1")
-        self._count_ccf = tk.StringVar(value="50")
         self._count_eck = tk.StringVar(value="51")
         self._count_ect = tk.StringVar(value="10")
         self._count_mik = tk.StringVar(value="31")
@@ -356,16 +355,15 @@ class WormtrailsGUI(tk.Tk):
         adv.add_label_entry("Max Worm Length:", self._count_mwl, row=0)
         adv.add_label_entry("Worm Kernel Size:", self._count_wks, row=1)
         adv.add_label_entry("Worm Thresh:", self._count_wt, row=2)
-        adv.add_label_entry("Motion Thresh:", self._count_mt, row=3)
-        adv.add_label_entry("Strict Motion Thresh:", self._count_smt, row=4)
+        adv.add_label_entry("Motion Thresh (blank=auto):", self._count_mt, row=3)
+        adv.add_label_entry("Strict Motion Thresh (blank=auto):", self._count_smt, row=4)
         adv.add_label_entry("Strict Motion Dilation:", self._count_smd, row=5)
         adv.add_label_entry("Stationary Dilation:", self._count_sd, row=6)
-        adv.add_label_entry("Contrast Correction:", self._count_ccf, row=7)
-        adv.add_label_entry("Edge Contrast Kernel:", self._count_eck, row=8)
-        adv.add_label_entry("Edge Contrast Thresh:", self._count_ect, row=9)
-        adv.add_label_entry("Mask Inclusion Kernel:", self._count_mik, row=10)
-        adv.add_label_entry("Edge Offset:", self._count_eo, row=11)
-        adv.add_checkbutton("Return Visualization", self._count_vis, row=12)
+        adv.add_label_entry("Edge Contrast Kernel:", self._count_eck, row=7)
+        adv.add_label_entry("Edge Contrast Thresh:", self._count_ect, row=8)
+        adv.add_label_entry("Mask Inclusion Kernel:", self._count_mik, row=9)
+        adv.add_label_entry("Edge Offset:", self._count_eo, row=10)
+        adv.add_checkbutton("Return Visualization", self._count_vis, row=11)
         adv.pack(fill='x', padx=6, pady=2)
 
         # Progress
@@ -388,11 +386,10 @@ class WormtrailsGUI(tk.Tk):
             'max_worm_length': _safe_int(self._count_mwl.get(), 30),
             'worm_kernel_size': _safe_int(self._count_wks.get(), 11),
             'worm_thresh': _safe_int(self._count_wt.get(), 5),
-            'motion_thresh': _safe_int(self._count_mt.get(), 3),
-            'strict_motion_thresh': _safe_int(self._count_smt.get(), 4),
+            'motion_thresh': _safe_int(self._count_mt.get(), None),
+            'strict_motion_thresh': _safe_int(self._count_smt.get(), None),
             'strict_motion_dilation': _safe_int(self._count_smd.get(), 1),
             'stationary_dilation': _safe_int(self._count_sd.get(), 1),
-            'contrast_motion_correction_factor': _safe_int(self._count_ccf.get(), 50),
             'edge_contrast_kernel_size': _safe_int(self._count_eck.get(), 51),
             'edge_contrast_thresh': _safe_int(self._count_ect.get(), 10),
             'mask_inclusion_kernel_size': _safe_int(self._count_mik.get(), 31),

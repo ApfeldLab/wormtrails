@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import pandas as pd
+from wormtrails.processing import fit_pixel_linear_model
 
 def count_video(
     video_array,
@@ -9,11 +10,10 @@ def count_video(
     max_worm_length=30,
     worm_kernel_size=11,
     worm_thresh=5,
-    motion_thresh=3,
-    strict_motion_thresh=4,
+    motion_thresh=None,
+    strict_motion_thresh=None,
     strict_motion_dilation=1,
     stationary_dilation=1,
-    contrast_motion_correction_factor=50,
     edge_contrast_kernel_size=51,
     edge_contrast_thresh=10,
     mask_inclusion_kernel_size=31,
@@ -21,7 +21,7 @@ def count_video(
     return_vis=True
 ):
     """
-    Counts roaming and stationary living worms in a video using motion detection and connected components analysis.
+    Counts roaming and stationary living worms in a video using linear model residuals and connected components analysis.
     
     Args:
         video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
@@ -30,12 +30,11 @@ def count_video(
         max_worm_length: Maximum expected worm length in pixels, used for dilation of problematic worm motion. Default is 30.
         worm_kernel_size: Kernel size for adaptive thresholding to detect worm bodies. Default is 11.
         worm_thresh: Threshold offset for adaptive thresholding. Default is 5.
-        motion_thresh: Minimum motion intensity to consider a region as moving. Default is 3.
-        strict_motion_thresh: Higher motion threshold for strict motion detection with problematic or stationary worms. Default is 4.
+        motion_thresh: Motion threshold for the log-scaled motion projection. If None, computed via Otsu from the log-motion distribution. Default is None.
+        strict_motion_thresh: Higher strict motion threshold. If None, computed as motion_thresh + 0.5 (after Otsu). Default is None.
         strict_motion_dilation: Kernel iterations for dilating the strict motion mask. Default is 1.
         stationary_dilation: Kernel iterations for dilating the stationary mask. Default is 1.
-        contrast_motion_correction_factor: Factor to subtract gradient-based false motion at high-contrast edges. Default is 50.
-        edge_contrast_kernel_size: Kernel size for edge contrast detection. Default is 51.
+        edge_contrast_kernel_size: Kernel size for edge contrast detection (plate mask). Default is 51.
         edge_contrast_thresh: Threshold for edge contrast detection. Default is 10.
         mask_inclusion_kernel_size: Kernel size for plate mask morphological closing. Default is 31.
         edge_offset: Number of erosion iterations on the plate mask edge. Default is 3.
@@ -47,9 +46,11 @@ def count_video(
         vis: Visualization array with detected worms highlighted (255 for roaming, 128 for stationary).
 
     Notes:
-        Prints per-label progress to stdout during processing — noisy for long videos.
-        Worms are classified as roaming if they show motion above threshold, stationary if they do not.
-        Plate edge regions are masked out to avoid false detections.
+        Motion is detected using per-pixel linear model residuals (from fit_pixel_linear_model)
+        instead of raw frame differencing. Motion energy is log-scaled for dynamic range compression.
+        Per-frame motion uses clipped negative residuals to localize worms at their current position.
+        Thresholds are automatically set via Otsu on the log-motion distribution when set to None.
+        Prints per-label progress to stdout during processing.
     """
     # currently fixed parameters:
     small_kernel_size = 3
@@ -63,24 +64,43 @@ def count_video(
     worm_dilation_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (worm_dilation_kernel_size, worm_dilation_kernel_size))
     mask_inclusion_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (mask_inclusion_kernel_size, mask_inclusion_kernel_size))
 
-    # get max intensity projection and motion array
+    # fit per-pixel linear model across full video; use residuals for motion detection
+    residuals, slope, intercept = fit_pixel_linear_model(video)
+
+    # motion projection: mean squared residual per pixel — captures all worm trails
+    motion_raw = np.mean(residuals ** 2, axis=0)
+    motion_raw[motion_raw < 1] = 1
+    log_motion = np.log2(motion_raw.astype(np.float64))
+    if np.max(log_motion) > 0:
+        log_motion = log_motion * 255.0 / np.max(log_motion)
+    motion_proj = np.clip(log_motion, 0, 255).astype(np.uint8)
+
+    # per-frame motion: clipped negative residuals — worms darker than linear trend
+    # negative residuals indicate the pixel is darker than expected (worm body present now)
+    neg_motion = -residuals
+    neg_motion[neg_motion < 0] = 0
+    # log-scale each frame independently
+    neg_log = np.zeros_like(neg_motion, dtype=np.uint8)
+    for t in range(neg_motion.shape[0]):
+        ft = neg_motion[t]
+        ft[ft < 1] = 1
+        lt = np.log2(ft.astype(np.float64))
+        if np.max(lt) > 0:
+            lt = lt * 255.0 / np.max(lt)
+        neg_log[t] = np.clip(lt, 0, 255).astype(np.uint8)
+
+    # auto-threshold via Otsu on the motion projection if not specified
+    if motion_thresh is None:
+        motion_thresh = cv2.threshold(motion_proj, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0]
+        if motion_thresh < 2:
+            motion_thresh = 2
+    if strict_motion_thresh is None:
+        strict_motion_thresh = min(motion_thresh + 10, 255)
+
     max_proj = np.max(video, axis=0)
-    min_proj = np.min(video, axis=0)
     median_proj = np.median(video, axis=0).astype(np.uint8)
-    motion_proj = max_proj.copy() - min_proj.copy()
-    background = max_proj.copy()
 
-    # correct for false motion on high contrast edges
-    bg_img = max_proj.copy().astype(np.float64)
-    grad_x = cv2.Sobel(bg_img, cv2.CV_64F, 1, 0, ksize=3)
-    grad_y = cv2.Sobel(bg_img, cv2.CV_64F, 0, 1, ksize=3)
-    grad = np.sqrt(grad_x**2 + grad_y**2)
-    motion_proj = motion_proj.astype(np.float64)
-    motion_proj -= grad / contrast_motion_correction_factor
-    motion_proj[motion_proj < 0] = 0
-    motion_proj = motion_proj.astype(np.uint8)
-
-    problematic_pixels = background.copy()
+    problematic_pixels = max_proj.copy()
     problematic_pixels = cv2.adaptiveThreshold(
         problematic_pixels,
         255,
@@ -126,7 +146,7 @@ def count_video(
     ret, motion_mask = cv2.threshold(motion_proj.copy(), motion_thresh, 255, cv2.THRESH_BINARY)
 
     # remove small noise and expand mask for roaming worm detection
-    for noise_size_thresh in [1, 15]: # single pixels are filtered out first, then adjacent pixel pairs
+    for noise_size_thresh in [1, 15]:
         _, mask_labels, mask_stats, _ = cv2.connectedComponentsWithStats(motion_mask, connectivity=8)
         areas = mask_stats[:, cv2.CC_STAT_AREA]
         areas[0] = 0
@@ -148,8 +168,7 @@ def count_video(
             worm_kernel_size,
             worm_thresh
         )
-        motion_frame = np.abs(background.copy().astype(np.int16) - video[t].copy().astype(np.int16)).astype(np.float64)
-        motion_frame -= grad / contrast_motion_correction_factor
+        motion_frame = neg_log[t].astype(np.float64)
 
         num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(potential_worms, connectivity=8)
         moving_labels_t = np.unique(labels_t[motion_frame > motion_thresh])
@@ -163,18 +182,16 @@ def count_video(
         is_valid[0] = False
         worms[t, is_valid[labels_t]] = 255
 
-
-        # recalculate the motion frame with median projection since worms may be brighter than the background in dark regions
-        motion_frame_median = np.abs(median_proj.copy().astype(np.int16) - video[t].copy().astype(np.int16)).astype(np.float64)
-        motion_frame_median -= grad / contrast_motion_correction_factor
-        is_moving_median = np.isin(np.arange(num_labels_t), np.unique(labels_t[motion_frame_median > motion_thresh]))
+        # recalculate motion using median-based negative residuals for fallback
+        median_frame = np.abs(median_proj.copy().astype(np.int16) - video[t].copy().astype(np.int16)).astype(np.float64)
+        is_moving_median = np.isin(np.arange(num_labels_t), np.unique(labels_t[median_frame > motion_thresh]))
         # of the valid worms, check whether they are problematic and not fully moving
         is_fallback = (areas >= min_worm_area) & is_moving_median & is_problematic & ~is_fully_moving
         is_fallback[0] = False
         # if they are problematic and not fully moving, add their associated motion pixels to a separate frame
-        fallback_motion = (motion_frame_median > strict_motion_thresh) & is_fallback[labels_t]
+        fallback_motion = (median_frame > strict_motion_thresh) & is_fallback[labels_t]
         fallback_motion = fallback_motion.astype(np.uint8)
-        # dilate the problematic/large worm motion pixels by the half the maximum length of a worm and add them to the worms frame
+        # dilate the problematic/large worm motion pixels by half the maximum length of a worm
         for i in range(int(max_worm_length/(worm_dilation_kernel_size-1))):
             fallback_motion = cv2.dilate(fallback_motion, worm_dilation_kernel)
             fallback_motion[motion_mask == 0] = 0
@@ -189,7 +206,6 @@ def count_video(
         vis[:, motion_proj > motion_thresh] = 0
     for l in range(1, num_labels):
         trail_area = stats[l, cv2.CC_STAT_AREA]
-        # a worm may be roaming if it's trail is larger than the maximum worm area, or if it is smaller than the maximum worm area but not overlapping with any problematic pixels
         if trail_area > max_worm_area/2 or (trail_area > min_worm_area and np.max(problematic_pixels[labels==l]) == 0):
             label_counts = []
             for t in range(video.shape[0]):
@@ -205,18 +221,17 @@ def count_video(
             label_count = np.max(label_counts)
             n_roaming += label_count
             if label_count > 0:
-                strict_motion_mask[labels == l] = 0 # remove analyzed trails of roaming worms from the strict motion mask, which will be used to check for stationary worms
+                strict_motion_mask[labels == l] = 0
                 stationary[labels == l] = 0
                 print(f"Label {l}: {label_count}  ", end="\r")
                 if return_vis:
                     vis[(vis != 255) & (labels == l)] = 128
     print(" "*60, end="\r")
 
-    # floodfill the stationary binary image from points in the motion mask
+    # find stationary alive worms from the strict motion mask
     alive_stationary = np.zeros_like(stationary, dtype=np.uint8)
     num_labels_sw, labels_sw, stats_sw, _ = cv2.connectedComponentsWithStats(stationary, connectivity=8)
 
-    # Find labels in stationary that intersect with the strict_motion_mask
     overlapping_labels = np.unique(labels_sw[cv2.dilate(strict_motion_mask, small_kernel, iterations=strict_motion_dilation) > 0])
     for label_idx in overlapping_labels:
         area = stats_sw[label_idx, cv2.CC_STAT_AREA]
@@ -229,7 +244,7 @@ def count_video(
     alive_stationary = cv2.dilate(alive_stationary, small_kernel, iterations=stationary_dilation)
 
     n_quiescent, _, _, _ = cv2.connectedComponentsWithStats(alive_stationary, connectivity=8)
-    n_quiescent -= 1 # remove the background label 0
+    n_quiescent -= 1
 
     if return_vis:
         vis[(vis != 255) & (alive_stationary > 0)] = 255
