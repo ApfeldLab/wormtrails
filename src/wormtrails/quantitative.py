@@ -74,7 +74,7 @@ def count_video(
     if np.max(log_motion) > 0 and motion_thresh is None:
         log_motion = log_motion * 255 / np.max(log_motion)
     else:
-        log_motion *= 5
+        log_motion *= 5 # improves sensitivity, may need to be adjusted for higher noise recordings
     motion_proj = np.clip(log_motion, 0, 255).astype(np.uint8)
 
     # per-frame motion: clipped negative residuals — worms darker than linear trend
