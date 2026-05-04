@@ -8,7 +8,7 @@ Predefined colormaps for time-encoded trail visualization.
 Each colormap is a 2D NumPy array of shape (N, 3) where N is the maximum window size.
 Colors are RGB values in the range [0, 255].
 
-white_to_black: Smooth gradient from white (0,0,0) to black (255,256,256)
+white_to_black: Smooth gradient from white (255,255,255) to black (0,0,0)
 black_to_white: Smooth gradient from black to white
 blue_to_red: Smooth gradient from blue to red
 banded_blue_to_red: Blue to red gradient with oscillating brightness

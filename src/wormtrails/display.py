@@ -114,6 +114,11 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
         scale_factor: Float value for the scaling factor, applied to trails to adjust brightness. Higher values increase contrast.
         offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise.
         light_background: Boolean value. If True, assumes dark trails on light background. If False, assumes bright trails on dark background.
+
+        Warning: due to double inversion, switching light_background from True to False (or vice versa)
+        produces the same output for a given colormap. To get the complementary temporal ordering,
+        use the opposite colormap (e.g. swap white_to_black for black_to_white) when flipping
+        light_background.
     """
     
     num_frames = average_subtracted_array.shape[0]
@@ -133,7 +138,7 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
     
     while True:
         current_idx = cv2.getTrackbarPos('Frame', window_name)
-        frame = frame = create_time_encoded_frame(average_subtracted_array, colormap=colormap, window=window, start_time=current_idx, scale_factor=scale_factor, offset=offset, light_background=light_background)
+        frame = create_time_encoded_frame(average_subtracted_array, colormap=colormap, window=window, start_time=current_idx, scale_factor=scale_factor, offset=offset, light_background=light_background)
 
         if frame.dtype in (np.float32, np.float64):
             frame = np.clip(frame, 0, 255).astype(np.uint8)

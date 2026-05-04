@@ -29,7 +29,7 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=True, inPlace=Fa
         average_frame = np.mean(array, axis=0)
     
     if kernel_size is None:
-        kernel_size = int(average_frame.shape[0]/8) * 2 + 1 # Kernel size is one quarter the image width
+        kernel_size = int(average_frame.shape[0]/8) * 2 + 1 # Kernel size is one quarter the image height
     if use_median_blur:
         blur_frame = cv2.medianBlur(average_frame.astype(np.uint8), kernel_size)
     else:
@@ -194,6 +194,11 @@ def create_time_encoded_array(average_subtracted_array, colormap=np.array([[0,0,
 
     Notes:
         Only returns arrays up to the last frame where a complete window fits.
+
+        Warning: due to double inversion, switching light_background from True to False (or vice versa)
+        produces the same output for a given colormap. To get the complementary temporal ordering,
+        use the opposite colormap (e.g. swap white_to_black for black_to_white) when flipping
+        light_background.
     """
     
     time_encoded_array = []
@@ -224,6 +229,11 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
 
     Notes:
         Uses numpy minimum/maximum projection to combine trail information from multiple frames.
+
+        Warning: due to double inversion, switching light_background from True to False (or vice versa)
+        produces the same output for a given colormap. To get the complementary temporal ordering,
+        use the opposite colormap (e.g. swap white_to_black for black_to_white) when flipping
+        light_background.
     """
     time_encoded_frame = None
 
