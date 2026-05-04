@@ -188,7 +188,7 @@ def count_assist(video_array, window_name='count assist'):
     motion_proj *= 255 / np.max(motion_proj)
     motion_proj = np.clip(motion_proj, 0, 255).astype(np.uint8)
 
-    residuals[residuals > 1] = 1
+    residuals[residuals > 0] = 0
     residuals = residuals ** 2
     residuals[residuals > 255] = 255
     residuals = residuals.astype(np.uint8)
