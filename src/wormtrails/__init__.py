@@ -35,7 +35,9 @@ from wormtrails.colormaps import (
     black_to_white,
     blue_to_red,
     banded_blue_to_red,
-    dark_separated_blue_to_red
+    dark_separated_blue_to_red,
+    middle_grey_last_black,
+    hsv_rainbow
 )
 
 from wormtrails.gui import main as start_gui

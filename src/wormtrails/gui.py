@@ -186,7 +186,7 @@ class WormtrailsGUI(tk.Tk):
         self._te_start_frame = tk.StringVar(value="0")
         self._te_light = tk.BooleanVar(value=True)
         te.add_combobox("Colormap:", self._te_colormap,
-                        ["blue_to_red", "white_to_black", "black_to_white", "banded_blue_to_red", "dark_separated_blue_to_red"], row=0)
+                        ["blue_to_red", "white_to_black", "black_to_white", "banded_blue_to_red", "dark_separated_blue_to_red", "middle_grey_last_black", "hsv_rainbow"], row=0)
         te.add_label_entry("Window:", self._te_window, row=1)
         te.add_label_entry("Scale Factor:", self._te_scale, row=2)
         te.add_label_entry("Offset:", self._te_offset, row=3)
@@ -252,6 +252,8 @@ class WormtrailsGUI(tk.Tk):
             'black_to_white': wts.black_to_white,
             'banded_blue_to_red': wts.banded_blue_to_red,
             'dark_separated_blue_to_red': wts.dark_separated_blue_to_red,
+            'middle_grey_last_black': wts.middle_grey_last_black,
+            'hsv_rainbow': wts.hsv_rainbow,
         }
         cm_name = self._te_colormap.get()
         return {

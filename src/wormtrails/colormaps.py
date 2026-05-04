@@ -1,12 +1,13 @@
 import numpy as np
 import math
+import cv2
 
 
 """
 Predefined colormaps for time-encoded trail visualization.
 
 Each colormap is a 2D NumPy array of shape (N, 3) where N is the maximum window size.
-Colors are RGB values in the range [0, 255].
+Colors are BGR values in the range [0, 255].
 
 white_to_black: Smooth gradient from white (255,255,255) to black (0,0,0)
 black_to_white: Smooth gradient from black to white
@@ -53,3 +54,19 @@ for i in range(256):
     pixel_value = (color*brightness).astype(np.int64)
     dark_separated_blue_to_red.append(pixel_value)
 dark_separated_blue_to_red = np.array(dark_separated_blue_to_red)
+
+
+middle_grey_last_black = []
+window = 20
+for i in range(window-1):
+    middle_grey_last_black.append(np.array([128, 128, 128]))
+middle_grey_last_black.append(np.array([0, 0, 0]))
+middle_grey_last_black = np.array(middle_grey_last_black)
+
+
+hsv_rainbow = []
+for i in range(180):
+    hsv = np.uint8([[[i, 255, 255]]])
+    bgr = cv2.cvtColor(hsv, cv2.COLOR_HSV2BGR)[0][0]
+    hsv_rainbow.append(np.array([bgr[0], bgr[1], bgr[2]]))
+hsv_rainbow = np.array(hsv_rainbow, dtype=np.float64)
