@@ -85,7 +85,7 @@ def count_video(
         ft = neg_motion[t]
         ft[ft < 1] = 1
         lt = np.log2(ft.astype(np.float64))
-        if np.max(lt) > 0:
+        if np.max(lt) > 0 and motion_thresh is None:
             lt = lt * 255.0 / np.max(lt)
         neg_log[t] = np.clip(lt, 0, 255).astype(np.uint8)
 
