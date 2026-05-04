@@ -5,7 +5,7 @@ import numpy as np
 import threading
 
 import wormtrails as wts
-from wormtrails.processing import create_time_encoded_frame
+from wormtrails.processing import create_time_encoded_frame, fit_pixel_linear_model, subtract_average
 
 
 class ProgressLabel(tk.Label):
@@ -161,17 +161,20 @@ class WormtrailsGUI(tk.Tk):
         vig.pack(fill='x', padx=6, pady=2)
 
         # Subtract average params
-        sub = CollapsibleFrame(self.tab_vis, "Subtract Average")
+        sub = CollapsibleFrame(self.tab_vis, "Subtract Average / Motion Detection")
+        self._vis_motion_method = tk.StringVar(value="subtract_average")
         self._sub_start = tk.StringVar(value="0")
         self._sub_end = tk.StringVar(value="")
         self._sub_abs = tk.BooleanVar(value=True)
         self._sub_proj = tk.BooleanVar(value=False)
         self._sub_light = tk.BooleanVar(value=True)
-        sub.add_label_entry("Average Start:", self._sub_start, row=0)
-        sub.add_label_entry("Average End (blank=last):", self._sub_end, row=1)
-        sub.add_checkbutton("Absolute Difference", self._sub_abs, row=2)
-        sub.add_checkbutton("Use Projection", self._sub_proj, row=3)
-        sub.add_checkbutton("Light Background", self._sub_light, row=4)
+        sub.add_combobox("Motion Method:", self._vis_motion_method,
+                         ["subtract_average", "linear_model_residuals"], row=0)
+        sub.add_label_entry("Average Start:", self._sub_start, row=1)
+        sub.add_label_entry("Average End (blank=last):", self._sub_end, row=2)
+        sub.add_checkbutton("Absolute Difference", self._sub_abs, row=3)
+        sub.add_checkbutton("Use Projection", self._sub_proj, row=4)
+        sub.add_checkbutton("Light Background", self._sub_light, row=5)
         sub.pack(fill='x', padx=6, pady=2)
 
         # Time encoding params
@@ -221,7 +224,7 @@ class WormtrailsGUI(tk.Tk):
             'use_median_blur': self._vig_median.get(),
         }
 
-    def _get_sub_params(self):
+    def _get_vis_sub_params(self):
         start = _safe_int(self._sub_start.get(), 0)
         end = _safe_int(self._sub_end.get(), -1)
         return {
@@ -231,6 +234,16 @@ class WormtrailsGUI(tk.Tk):
             'use_projection': self._sub_proj.get(),
             'light_background': self._sub_light.get(),
         }
+
+    def _compute_motion(self, video, method, sub_params):
+        if method == "linear_model_residuals":
+            residuals, _, _ = fit_pixel_linear_model(video)
+            residuals[residuals > 0] = 0  # only negative residuals for dark worms on light background
+            residuals = residuals ** 2
+            residuals[residuals > 255] = 255
+            return residuals.astype(np.uint8)
+        else:
+            return subtract_average(video, **sub_params)
 
     def _get_te_params(self):
         colormap_map = {
@@ -257,8 +270,9 @@ class WormtrailsGUI(tk.Tk):
         video = wts.read_video_file(self.video_path.get())
         vig = self._get_vig_params()
         corrected = wts.correct_vignetting(video, **vig)
-        sub = self._get_sub_params()
-        self._motion = wts.subtract_average(corrected, **sub)
+        sub = self._get_vis_sub_params()
+        method = self._vis_motion_method.get()
+        self._motion = self._compute_motion(corrected, method, sub)
         self._te_params = self._get_te_params()
         motion = self._motion
         te_params = self._te_params
@@ -316,8 +330,9 @@ class WormtrailsGUI(tk.Tk):
         video = wts.read_video_file(self.video_path.get())
         vig = self._get_vig_params()
         corrected = wts.correct_vignetting(video, **vig)
-        sub = self._get_sub_params()
-        motion = wts.subtract_average(corrected, **sub)
+        sub = self._get_vis_sub_params()
+        method = self._vis_motion_method.get()
+        motion = self._compute_motion(corrected, method, sub)
         window = _safe_int(self._tr_window.get(), 20)
         tracks = wts.create_track_array(motion, window=window)
         self.after(0, lambda t=tracks: wts.show_video_array(t))
@@ -426,6 +441,7 @@ class WormtrailsGUI(tk.Tk):
 
         # Preprocessing params
         prep = CollapsibleFrame(self.tab_chemotaxis, "Preprocessing")
+        self._chem_motion_method = tk.StringVar(value="subtract_average")
         self._chem_vig_k = tk.StringVar(value="")
         self._chem_vig_m = tk.BooleanVar(value=False)
         self._chem_sub_s = tk.StringVar(value="0")
@@ -434,14 +450,16 @@ class WormtrailsGUI(tk.Tk):
         self._chem_sub_p = tk.BooleanVar(value=False)
         self._chem_sub_l = tk.BooleanVar(value=True)
         self._chem_thresh = tk.StringVar(value="30")
-        prep.add_label_entry("Vignetting Kernel (blank=auto):", self._chem_vig_k, row=0)
-        prep.add_checkbutton("Vignetting: Median Blur", self._chem_vig_m, row=1)
-        prep.add_label_entry("Subtract Avg Start:", self._chem_sub_s, row=2)
-        prep.add_label_entry("Subtract Avg End (blank=last):", self._chem_sub_e, row=3)
-        prep.add_checkbutton("Subtract: Absolute Diff", self._chem_sub_a, row=4)
-        prep.add_checkbutton("Subtract: Use Projection", self._chem_sub_p, row=5)
-        prep.add_checkbutton("Subtract: Light Background", self._chem_sub_l, row=6)
-        prep.add_label_entry("Threshold Value:", self._chem_thresh, row=7)
+        prep.add_combobox("Motion Method:", self._chem_motion_method,
+                          ["subtract_average", "linear_model_residuals"], row=0)
+        prep.add_label_entry("Vignetting Kernel (blank=auto):", self._chem_vig_k, row=1)
+        prep.add_checkbutton("Vignetting: Median Blur", self._chem_vig_m, row=2)
+        prep.add_label_entry("Subtract Avg Start:", self._chem_sub_s, row=3)
+        prep.add_label_entry("Subtract Avg End (blank=last):", self._chem_sub_e, row=4)
+        prep.add_checkbutton("Subtract: Absolute Diff", self._chem_sub_a, row=5)
+        prep.add_checkbutton("Subtract: Use Projection", self._chem_sub_p, row=6)
+        prep.add_checkbutton("Subtract: Light Background", self._chem_sub_l, row=7)
+        prep.add_label_entry("Threshold Value:", self._chem_thresh, row=8)
         prep.pack(fill='x', padx=6, pady=2)
 
         # Analysis params
@@ -487,6 +505,7 @@ class WormtrailsGUI(tk.Tk):
         if sub_end_raw == "":
             sub_end = -1
         return {
+            'motion_method': self._chem_motion_method.get(),
             'vig': {'kernel_size': vig_kernel, 'use_median_blur': self._chem_vig_m.get()},
             'sub': {
                 'average_start': _safe_int(self._chem_sub_s.get(), 0),
@@ -503,9 +522,10 @@ class WormtrailsGUI(tk.Tk):
         prep = self._get_chemo_prep_params()
 
         corrected = wts.correct_vignetting(video, **prep['vig'])
-        motion = wts.subtract_average(corrected, **prep['sub'])
+        motion = self._compute_motion(corrected, prep['motion_method'], prep['sub'])
         thresh_val = prep['threshold']
-        binary = cv2.threshold(motion, thresh_val, 255, cv2.THRESH_BINARY)[1]
+        motion[motion > thresh_val] = 255
+        motion[motion <= thresh_val] = 0
 
         bx = self.chemo_bait_x.get()
         by = self.chemo_bait_y.get()
@@ -514,7 +534,7 @@ class WormtrailsGUI(tk.Tk):
             test_spot = (int(by), int(bx))
 
         df = wts.measure_chemotaxis(
-            binary,
+            motion,
             time_window=self.chemo_window.get(),
             interval=self.chemo_int.get(),
             minimum_size=self.chemo_min.get(),
