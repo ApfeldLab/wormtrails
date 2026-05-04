@@ -71,29 +71,26 @@ def count_video(
     motion_raw = np.mean(residuals ** 2, axis=0, dtype=np.float32)
     motion_raw[motion_raw < 1] = 1
     log_motion = np.log2(motion_raw.astype(np.float64))
-    if np.max(log_motion) > 0 and motion_thresh is None:
-        log_motion = log_motion * 255 / np.max(log_motion)
-    else:
-        log_motion *= 5 # improves sensitivity, may need to be adjusted for higher noise recordings
+    log_motion *= 5 # improves sensitivity, may need to be adjusted for higher noise recordings
     motion_proj = np.clip(log_motion, 0, 255).astype(np.uint8)
 
     # per-frame motion: clipped negative residuals — worms darker than linear trend
     # negative residuals indicate the pixel is darker than expected (worm body present now)
     neg_motion = -residuals
     neg_motion[neg_motion < 1] = 1
+    neg_motion = neg_motion ** 2
     # log-scale (improves Otsu thresholding)
     neg_log = np.log2(neg_motion.astype(np.float64))
-    if np.max(log_motion > 0) and motion_thresh is None:
-        neg_log = neg_log * 255 / np.max(neg_log)
+    neg_log *= 5 # match motion_proj scaling
     neg_log = np.clip(neg_log, 0, 255).astype(np.uint8)
 
     # auto-threshold via Otsu on the motion projection if not specified
     if motion_thresh is None:
         motion_thresh = cv2.threshold(motion_proj, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)[0]
-        if motion_thresh < 2:
-            motion_thresh = 2
+        if motion_thresh < 1:
+            motion_thresh = 1
     if strict_motion_thresh is None:
-        strict_motion_thresh = min(motion_thresh + 10, 255)
+        strict_motion_thresh = min(motion_thresh * 1.5, 255)
 
     max_proj = np.max(video, axis=0)
     median_proj = np.median(video, axis=0).astype(np.uint8)
@@ -157,7 +154,9 @@ def count_video(
 
     # find living worms which will be used for counting the number of worms in trails
     worms = np.zeros_like(video, dtype=np.uint8)
-    for t in range(worms.shape[0]):
+    t_start = video.shape[0] // 3
+    t_end = 2 * video.shape[0] // 3
+    for t in range(t_start, t_end):
         potential_worms = cv2.adaptiveThreshold(
             video[t].copy(),
             255,
@@ -206,7 +205,7 @@ def count_video(
         trail_area = stats[l, cv2.CC_STAT_AREA]
         if trail_area > max_worm_area/2 or (trail_area > min_worm_area and np.max(problematic_pixels[labels==l]) == 0):
             label_counts = []
-            for t in range(video.shape[0]):
+            for t in range(t_start, t_end):
                 worms_t = worms[t].copy()
                 worms_t[labels != l] = 0
                 num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(worms_t, connectivity=8)
@@ -216,7 +215,7 @@ def count_video(
                 label_counts.append(np.sum(is_valid))
                 if return_vis and np.max(label_counts) > 0:
                     vis[t, is_valid[labels_t]] = 255
-            label_count = np.max(label_counts)
+            label_count = np.max(label_counts) if label_counts else 0
             n_roaming += label_count
             if label_count > 0:
                 strict_motion_mask[labels == l] = 0
