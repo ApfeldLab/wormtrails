@@ -181,28 +181,35 @@ def count_assist(video_array, window_name='count assist'):
         return
 
     # Calculate the motion overlay
+    residuals, _, _ = fit_pixel_linear_model(video_array)
+    motion_proj = np.mean(residuals**2, axis=0)
+    motion_proj[motion_proj < 1] = 1
+    motion_proj = np.log2(motion_proj.astype(np.float64))
+    motion_proj *= 255 / np.max(motion_proj)
+    motion_proj = np.clip(motion_proj, 0, 255).astype(np.uint8)
+
+    residuals[residuals > 1] = 1
+    residuals = residuals ** 2
+    residuals[residuals > 255] = 255
+    residuals = residuals.astype(np.uint8)
+
     overlay_video = []
-    for t in range(2, num_frames):
-        res_t, _, _ = fit_pixel_linear_model(video_array[:t])
-        motion = np.mean(res_t ** 2, axis=0)
-        motion[motion < 1] = 1
-        log_motion = np.log2(motion.astype(np.float64))
-        if np.max(log_motion) > 0:
-            log_motion *= 255 / np.max(log_motion)
-        log_motion = np.clip(log_motion, 0, 255).astype(np.uint8)
-        overlay_video.append(video_array[t] // 2 + log_motion // 2)
+    overlay_video.append(np.mean(video_array, axis=0) // 2 + motion_proj // 2)
+    overlay_video.append(video_array[0] // 2)
+    for t in range(num_frames):
+        overlay_video.append(video_array[t] // 2 + residuals[t] // 2)
 
     markers = []
 
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 0, num_frames - 3, lambda x: None)
+    cv2.createTrackbar('Frame', window_name, 0, num_frames - 1, lambda x: None)
 
     # Initialize window properly
     cv2.waitKey(1)
     cv2.destroyAllWindows()
     cv2.waitKey(1)
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 0, num_frames - 3, lambda x: None)
+    cv2.createTrackbar('Frame', window_name, 0, len(overlay_video) - 1, lambda x: None)
 
     state = {'current_idx': 0, 'needs_redraw': True}
 

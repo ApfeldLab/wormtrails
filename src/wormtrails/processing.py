@@ -124,7 +124,7 @@ def fit_pixel_linear_model(video: np.ndarray):
     Returns
     -------
     residuals : np.ndarray, shape (T, H, W)
-        Residuals for each pixel.
+        Residuals for each pixel (float16).
     slope : np.ndarray, shape (H, W)
     intercept : np.ndarray, shape (H, W)
     """
@@ -135,8 +135,8 @@ def fit_pixel_linear_model(video: np.ndarray):
         raise ValueError("Need at least 2 frames to fit a linear model")
 
     y_mat = video.reshape(T, -1)          # (T, H*W)
-    t = np.arange(T, dtype=float).reshape(-1, 1)
-    X = np.column_stack((t, np.ones(T)))  # (T, 2)
+    t = np.arange(T, dtype=np.float64).reshape(-1, 1)
+    X = np.column_stack((t, np.ones(T, dtype=np.float64)))  # (T, 2)
 
     XTX_inv = np.linalg.inv(X.T @ X)
     beta = XTX_inv @ X.T @ y_mat          # (2, H*W)
@@ -144,11 +144,11 @@ def fit_pixel_linear_model(video: np.ndarray):
     slope = beta[0].reshape(H, W)
     intercept = beta[1].reshape(H, W)
 
-    y_pred = X @ beta                     # (T, H*W)
-    residuals = y_mat - y_pred
-    res = residuals.reshape(T, H, W)
+    # residuals in float16 to reduce memory (half the footprint of float32)
+    y_pred = X.astype(np.float16) @ beta.astype(np.float16)  # (T, H*W) float16
+    residuals = (y_mat.astype(np.float16) - y_pred).reshape(T, H, W)
 
-    return res, slope, intercept
+    return residuals, slope, intercept
 
 def create_track_array(average_subtracted_array, window):
     """

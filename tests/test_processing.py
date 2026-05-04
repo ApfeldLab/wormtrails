@@ -1,6 +1,6 @@
 import unittest
 import numpy as np
-from wormtrails.processing import correct_vignetting, subtract_average, create_time_encoded_array, create_track_array
+from wormtrails.processing import correct_vignetting, subtract_average, create_time_encoded_array, create_track_array, fit_pixel_linear_model
 
 class TestProcessing(unittest.TestCase):
     def setUp(self):
@@ -31,6 +31,33 @@ class TestProcessing(unittest.TestCase):
         time_encoded = create_time_encoded_array(motion, window=5)
         self.assertEqual(time_encoded.shape, (5, 200, 200, 3))
         self.assertTrue(np.max(time_encoded) > 0)
+
+    def test_fit_pixel_linear_model_output_shapes_and_dtypes(self):
+        resid, slope, intercept = fit_pixel_linear_model(self.video)
+        self.assertEqual(resid.shape, self.video.shape)
+        self.assertEqual(slope.shape, (200, 200))
+        self.assertEqual(intercept.shape, (200, 200))
+        self.assertEqual(resid.dtype, np.float16)
+        self.assertEqual(slope.dtype, np.float64)
+        self.assertEqual(intercept.dtype, np.float64)
+
+    def test_fit_pixel_linear_model_constant_video(self):
+        const = np.full((10, 50, 50), 100, dtype=np.uint8)
+        resid, slope, _ = fit_pixel_linear_model(const)
+        self.assertAlmostEqual(np.max(np.abs(resid)), 0, places=5)
+        self.assertAlmostEqual(np.max(np.abs(slope)), 0, places=5)
+
+    def test_fit_pixel_linear_model_raises_on_1d(self):
+        with self.assertRaises(ValueError):
+            fit_pixel_linear_model(np.array([1, 2, 3], dtype=np.uint8))
+
+    def test_fit_pixel_linear_model_raises_on_lt2_frames(self):
+        with self.assertRaises(ValueError):
+            fit_pixel_linear_model(np.array([[1]], dtype=np.uint8).reshape(1, 1, 1))
+
+    def test_fit_pixel_linear_model_nonzero_motion(self):
+        resid, _, _ = fit_pixel_linear_model(self.video)
+        self.assertGreater(np.max(np.abs(resid)), 0)
 
 if __name__ == '__main__':
     unittest.main()

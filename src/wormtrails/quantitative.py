@@ -68,26 +68,24 @@ def count_video(
     residuals, slope, intercept = fit_pixel_linear_model(video)
 
     # motion projection: mean squared residual per pixel — captures all worm trails
-    motion_raw = np.mean(residuals ** 2, axis=0)
+    motion_raw = np.mean(residuals ** 2, axis=0, dtype=np.float32)
     motion_raw[motion_raw < 1] = 1
     log_motion = np.log2(motion_raw.astype(np.float64))
-    if np.max(log_motion) > 0:
-        log_motion = log_motion * 255.0 / np.max(log_motion)
+    if np.max(log_motion) > 0 and motion_thresh is None:
+        log_motion = log_motion * 255 / np.max(log_motion)
+    else:
+        log_motion *= 5
     motion_proj = np.clip(log_motion, 0, 255).astype(np.uint8)
 
     # per-frame motion: clipped negative residuals — worms darker than linear trend
     # negative residuals indicate the pixel is darker than expected (worm body present now)
     neg_motion = -residuals
-    neg_motion[neg_motion < 0] = 0
-    # log-scale each frame independently
-    neg_log = np.zeros_like(neg_motion, dtype=np.uint8)
-    for t in range(neg_motion.shape[0]):
-        ft = neg_motion[t]
-        ft[ft < 1] = 1
-        lt = np.log2(ft.astype(np.float64))
-        if np.max(lt) > 0 and motion_thresh is None:
-            lt = lt * 255.0 / np.max(lt)
-        neg_log[t] = np.clip(lt, 0, 255).astype(np.uint8)
+    neg_motion[neg_motion < 1] = 1
+    # log-scale (improves Otsu thresholding)
+    neg_log = np.log2(neg_motion.astype(np.float64))
+    if np.max(log_motion > 0) and motion_thresh is None:
+        neg_log = neg_log * 255 / np.max(neg_log)
+    neg_log = np.clip(neg_log, 0, 255).astype(np.uint8)
 
     # auto-threshold via Otsu on the motion projection if not specified
     if motion_thresh is None:
@@ -168,7 +166,7 @@ def count_video(
             worm_kernel_size,
             worm_thresh
         )
-        motion_frame = neg_log[t].astype(np.float64)
+        motion_frame = neg_log[t]
 
         num_labels_t, labels_t, stats_t, centroids_t = cv2.connectedComponentsWithStats(potential_worms, connectivity=8)
         moving_labels_t = np.unique(labels_t[motion_frame > motion_thresh])
