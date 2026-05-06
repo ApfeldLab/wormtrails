@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import math
+from joblib import Parallel, delayed
 
 def correct_vignetting(array, kernel_size=None, use_median_blur=True, inPlace=False):
     """
@@ -210,6 +211,38 @@ def create_time_encoded_array(average_subtracted_array, colormap=np.array([[0,0,
 
     return np.stack(time_encoded_array, axis=0)
 
+def create_time_encoded_array_parallel(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, scale_factor=1, offset=0, light_background=True, n_jobs=-1):
+    """Parallel version of create_time_encoded_array using joblib.
+    
+    Each time-encoded frame is computed independently, making this ideal for parallelization.
+    Falls back to the sequential version when the number of output frames is small
+    (below the threshold) to avoid parallelization overhead.
+    
+    Args:
+        average_subtracted_array: 3D Numpy array (T, H, W) of uint8.
+        colormap: Numpy array of shape (N, 3) with BGR color values.
+        window: Window size for trail creation.
+        scale_factor: Brightness scaling factor (default: 1).
+        offset: Brightness offset (default: 0).
+        light_background: Light background flag (default: True).
+        n_jobs: Number of parallel workers (-1 for all cores, default: -1).
+        
+    Returns:
+        4D Numpy array (n_frames, H, W, 3) of uint8.
+    """
+    n_frames = average_subtracted_array.shape[0] - window
+    
+    # Use sequential mode for small arrays to avoid parallelization overhead
+    if n_frames <= 20:
+        return create_time_encoded_array(average_subtracted_array, colormap, window, scale_factor, offset, light_background)
+    
+    results = Parallel(n_jobs=n_jobs, prefer='processes', backend='loky')(
+        delayed(create_time_encoded_frame)(average_subtracted_array, colormap, window, i, scale_factor, offset, light_background)
+        for i in range(n_frames)
+    )
+    
+    return np.stack(results, axis=0)
+
 def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, start_time=0, scale_factor=1, offset=0, light_background=True):
     """
     Projects along the time axis of the average subtracted array within a local frame window of the specified size to create a single frame with trails.
@@ -255,6 +288,59 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
             time_encoded_frame = np.min([time_encoded_frame, colormapped_frame], axis=0) # minimum pixel value is used for projections if we want dark tracks on a light background
         else:
             time_encoded_frame = np.max([time_encoded_frame, colormapped_frame], axis=0) # maximum pixel value is used for projections if we want light tracks on a dark background
+
+    return time_encoded_frame
+
+def create_time_encoded_frame_vectorized(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, start_time=0, scale_factor=1, offset=0, light_background=True):
+    """
+    Faster than create_time_encoded_frame but uses more memory.
+    Projects along the time axis of the average subtracted array within a local frame window of the specified size to create a single frame with trails.
+    This implementation supports colormaps to encode time within frames.
+    
+    Args:
+        average_subtracted_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the average subtracted video frames, with time as axis 0.
+        colormap: Numpy array of shape (N, 3) containing the colormap colors (B, G, R values 0-255), applied to the trail frame with color values being applied in order scaled to the window size.
+        window: Integer value for the window size (number of frames to look back), used to create trails. Shorter windows take less processing time.
+        start_time: Integer value for the start time of the frame. The window starts at this frame and continues forward for the specified window size.
+        scale_factor: Float value for the scaling factor, applied to the trails to adjust brightness. Higher values increase contrast. Default is 1.
+        offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
+        light_background: Boolean value. If True, assumes dark trails on light background and inverts the trail rendering. If False, assumes bright trails on dark background.
+
+    Returns:
+        time_encoded_frame: 3D Numpy array of 8 bit unsigned integers (uint8) containing the time encoded frame with trails, with color channel as axis 3 (last axis), shape (height, width, 3).
+
+    Notes:
+        Uses numpy minimum/maximum projection to combine trail information from multiple frames.
+
+        Warning: due to double inversion, switching light_background from True to False (or vice versa)
+        produces the same output for a given colormap. To get the complementary temporal ordering,
+        use the opposite colormap (e.g. swap white_to_black for black_to_white) when flipping
+        light_background.
+    """
+    time_encoded_frame = None
+
+    # vectorized colormap lookup and per-frame color scaling
+    colormap_indices = np.arange(window)
+    colormap_indices = (np.array(colormap_indices) * np.shape(colormap)[0] / window).astype(int)
+    tmap = colormap[colormap_indices, :]  # shape (window, 3)
+
+    if light_background:
+        tmap = 255 - tmap
+
+    frames = average_subtracted_array[start_time:start_time + window]  # (window, H, W)
+    colormapped_frames = np.clip(tmap[:, np.newaxis, np.newaxis, :] * frames[:, :, :, np.newaxis] / 255 * scale_factor + offset, 0, 255).astype(np.uint8)  # (window, H, W, 3)
+
+    if light_background:
+        colormapped_frames = 255 - colormapped_frames
+
+    # sequential accumulation (can't vectorize min/max projection)
+    for i in range(window):
+        if time_encoded_frame is None:
+            time_encoded_frame = colormapped_frames[i]
+        elif light_background:
+            time_encoded_frame = np.minimum(time_encoded_frame, colormapped_frames[i])
+        else:
+            time_encoded_frame = np.maximum(time_encoded_frame, colormapped_frames[i])
 
     return time_encoded_frame
 

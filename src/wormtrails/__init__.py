@@ -17,7 +17,9 @@ from wormtrails.processing import (
     fit_pixel_linear_model,
     create_track_array,
     create_time_encoded_array,
+    create_time_encoded_array_parallel,
     create_time_encoded_frame,
+    create_time_encoded_frame_vectorized,
     add_timestamp,
     align_frames
 )
@@ -25,6 +27,7 @@ from wormtrails.processing import (
 from wormtrails.quantitative import (
     count_video,
     measure_chemotaxis,
+    measure_chemotaxis_parallel,
     calculate_relative_metrics,
     measure_component,
     measure_window

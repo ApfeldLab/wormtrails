@@ -12,7 +12,8 @@ setup(
     install_requires=[
         'numpy',
         'opencv-python',
-        'pandas'
+        'pandas',
+        'joblib',
     ],
     entry_points={
         'console_scripts': [

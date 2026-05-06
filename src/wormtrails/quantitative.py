@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 import pandas as pd
+from joblib import Parallel, delayed
 from wormtrails.processing import fit_pixel_linear_model
 
 def count_video(
@@ -420,5 +421,54 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
             
             worm_data.append(m)
 
+    return pd.DataFrame(worm_data)
+
+def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None, n_jobs=-1):
+    """Parallel version of measure_chemotaxis using joblib.
+    
+    Each time window is processed independently, making this ideal for parallelization.
+    Falls back to the sequential version when the number of windows is small
+    (below the threshold) to avoid parallelization overhead.
+    
+    Args:
+        binary_array: 3D Numpy array (T, H, W) of uint8 (binary/0-255).
+        time_window: Number of frames per window (default: 10).
+        interval: Frame interval between windows (default: 60).
+        minimum_size: Minimum component size in pixels (default: 10).
+        maximum_size: Maximum component size in pixels (default: 1000).
+        test_spot: Tuple or array of (y, x) for bait location (default: None).
+        n_jobs: Number of parallel workers (-1 for all cores, default: -1).
+        
+    Returns:
+        pandas DataFrame with chemotaxis metrics for each detected worm trail.
+    """
+    n_windows = (binary_array.shape[0] - time_window + 1) // interval
+    
+    if n_windows <= 15:
+        return measure_chemotaxis(binary_array, time_window, interval, minimum_size, maximum_size, test_spot)
+    
+    window_starts = list(range(0, binary_array.shape[0] - time_window + 1, interval))
+    
+    def _process_window(t):
+        window_data = measure_window(binary_array[t:t+time_window], time_window, minimum_size, maximum_size)
+        for m in window_data:
+            m['time'] = t
+            if test_spot is not None:
+                pos = np.array([m['y'], m['x']])
+                direction = np.array([m['direction_y'], m['direction_x']])
+                r, theta, rel_angle = calculate_relative_metrics(pos, direction, test_spot)
+                m['r'] = r
+                m['theta'] = theta
+                m['relative_angle'] = rel_angle
+        return window_data
+    
+    results = Parallel(n_jobs=n_jobs, prefer='processes', backend='loky')(
+        delayed(_process_window)(t) for t in window_starts
+    )
+    
+    worm_data = []
+    for window_results in results:
+        worm_data.extend(window_results)
+    
     return pd.DataFrame(worm_data)
 
