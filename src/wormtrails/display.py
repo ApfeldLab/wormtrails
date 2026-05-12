@@ -188,21 +188,20 @@ def count_assist(video_array, window_name='count assist'):
     motion_proj *= 255 / np.max(motion_proj)
     motion_proj = np.clip(motion_proj, 0, 255).astype(np.uint8)
 
-    residuals[residuals > 0] = 0
-    residuals = residuals ** 2
-    residuals[residuals < 1] = 1
-    residuals = np.log2(residuals.astype(np.float64))
-    residuals *= 255 / np.max(residuals)
-    #residuals[residuals > 255] = 255
-    residuals = np.clip(residuals, 0, 255).astype(np.uint8)
+    time_derivative = video_array.copy().astype(np.float16)[1:] - video_array.copy().astype(np.float16)[:-1]
+    time_derivative = np.abs(time_derivative)
+    time_derivative[time_derivative < 1] = 1
+    time_derivative = np.log2(time_derivative)
+    time_derivative *= 255 / np.max(time_derivative)
+    time_derivative = np.clip(time_derivative, 0, 255).astype(np.uint8)
 
     overlay_video = []
-    for t in range(0, num_frames//2):
-        overlay_video.append(video_array[t] // 2 + residuals[t] // 2)
+    overlay_video.append(video_array[0]//2)
     overlay_video.append(np.mean(video_array, axis=0) // 2 + motion_proj // 2)
-    overlay_video.append(video_array[num_frames//2] // 2)
-    for t in range(num_frames//2, num_frames):
-        overlay_video.append(video_array[t] // 2 + residuals[t] // 2)
+    for t in range(num_frames-1):
+        overlay_video.append(
+            np.clip((video_array[t] // 2) + (time_derivative[t] // 2), 0, 255).astype(np.uint8)
+        )
 
     markers = []
 
@@ -214,9 +213,9 @@ def count_assist(video_array, window_name='count assist'):
     cv2.destroyAllWindows()
     cv2.waitKey(1)
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, num_frames//2, len(overlay_video) - 1, lambda x: None)
+    cv2.createTrackbar('Frame', window_name, 1, len(overlay_video) - 1, lambda x: None)
 
-    state = {'current_idx': num_frames//2, 'needs_redraw': True}
+    state = {'current_idx': 1, 'needs_redraw': True}
 
     def mouse_callback(event, x, y, flags, param):
         if event == cv2.EVENT_LBUTTONDBLCLK:
