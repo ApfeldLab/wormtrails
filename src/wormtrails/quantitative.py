@@ -4,6 +4,98 @@ import pandas as pd
 from joblib import Parallel, delayed
 from wormtrails.processing import fit_pixel_linear_model
 
+def _find_concentric_center(image, mask_radius):
+    """
+    Finds the center coordinates of a circular plate feature in the image
+    that is of a similar or larger size to the mask_radius.
+    
+    If no circular feature is found, defaults to the center of the image.
+    """
+    h, w = image.shape[:2]
+    
+    # If the image size is smaller than the mask radius, we cannot expect to find
+    # similar or larger circles, so we default to the center of the image.
+    if min(h, w) < mask_radius:
+        return w // 2, h // 2
+
+    # 1. Try HoughCircles to find similar or larger circles
+    try:
+        blurred = cv2.GaussianBlur(image, (9, 9), 2)
+        min_r = int(mask_radius * 0.8)
+        max_r = int(mask_radius * 1.1)
+        circles = cv2.HoughCircles(
+            blurred,
+            cv2.HOUGH_GRADIENT,
+            dp=1,
+            minDist=100,
+            param1=50,
+            param2=30,
+            minRadius=min_r,
+            maxRadius=max_r
+        )
+        if circles is not None:
+            circles = np.round(circles[0]).astype(int)
+            # Pick the first circle detected (typically the most prominent)
+            return int(circles[0][0]), int(circles[0][1])
+    except Exception:
+        pass
+
+    # 2. Fallback: Find contours of thresholded image and fit circles
+    try:
+        thresh = cv2.adaptiveThreshold(
+            image,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY_INV,
+            51,
+            10
+        )
+        contours, _ = cv2.findContours(thresh, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE)
+        
+        best_center = None
+        best_score = -1
+        min_r = mask_radius * 0.8
+        max_r = mask_radius * 2.0
+        
+        for c in contours:
+            (x, y), r = cv2.minEnclosingCircle(c)
+            if min_r <= r <= max_r:
+                area = cv2.contourArea(c)
+                perimeter = cv2.arcLength(c, True)
+                circularity = (4 * np.pi * area / (perimeter ** 2)) if perimeter > 0 else 0
+                score = circularity * r
+                if score > best_score:
+                    best_score = score
+                    best_center = (int(x), int(y))
+                    
+        if best_center is not None:
+            return best_center
+    except Exception:
+        pass
+
+    # 3. Final fallback: Center of the image
+    return w // 2, h // 2
+
+def create_plate_mask(
+    image,
+    mask_radius=375
+):
+    """
+    Creates a binary plate mask to isolate the assay area from plate boundaries.
+
+    Args:
+        image: 2D Numpy array of 8 bit unsigned integers (uint8) of the plate (usually max projection).
+        mask_radius: User defined circle radius for the plate mask. Default is 375.
+
+    Returns:
+        plate_mask: 2D binary Numpy array (uint8) where 255 represents the assay area and 0 is masked.
+    """
+    cx, cy = _find_concentric_center(image, mask_radius)
+    plate_mask = np.zeros_like(image, dtype=np.uint8)
+    cv2.circle(plate_mask, (cx, cy), mask_radius, 255, -1)
+    
+    return plate_mask
+
 def count_video(
     video_array,
     min_worm_area=20,
@@ -15,10 +107,7 @@ def count_video(
     strict_motion_thresh=None,
     strict_motion_dilation=1,
     stationary_dilation=1,
-    edge_contrast_kernel_size=51,
-    edge_contrast_thresh=10,
-    mask_inclusion_kernel_size=31,
-    edge_offset=3,
+    mask_radius=375,
     return_vis=True
 ):
     """
@@ -35,10 +124,7 @@ def count_video(
         strict_motion_thresh: Higher strict motion threshold. If None, computed as motion_thresh + 0.5 (after Otsu). Default is None.
         strict_motion_dilation: Kernel iterations for dilating the strict motion mask. Default is 1.
         stationary_dilation: Kernel iterations for dilating the stationary mask. Default is 1.
-        edge_contrast_kernel_size: Kernel size for edge contrast detection (plate mask). Default is 51.
-        edge_contrast_thresh: Threshold for edge contrast detection. Default is 10.
-        mask_inclusion_kernel_size: Kernel size for plate mask morphological closing. Default is 31.
-        edge_offset: Number of erosion iterations on the plate mask edge. Default is 3.
+        mask_radius: User defined circle radius for the plate mask. Default is 375.
         return_vis: If True, returns a visualization array with detected worms highlighted. If False, returns the original video copy. Default is True.
 
     Returns:
@@ -63,7 +149,6 @@ def count_video(
     # create kernels which we'll use throughout the pipeline
     small_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (small_kernel_size, small_kernel_size))
     worm_dilation_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (worm_dilation_kernel_size, worm_dilation_kernel_size))
-    mask_inclusion_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (mask_inclusion_kernel_size, mask_inclusion_kernel_size))
 
     # fit per-pixel linear model across full video; use residuals for motion detection
     residuals, slope, intercept = fit_pixel_linear_model(video)
@@ -119,21 +204,10 @@ def count_video(
     )
 
     # create mask to remove edges
-    plate_mask = max_proj.copy()
-    seed_point = [plate_mask.shape[0]//2, plate_mask.shape[1]//2]
-    plate_mask = cv2.adaptiveThreshold(
-        plate_mask,
-        128,
-        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
-        cv2.THRESH_BINARY,
-        edge_contrast_kernel_size,
-        edge_contrast_thresh
+    plate_mask = create_plate_mask(
+        max_proj,
+        mask_radius=mask_radius
     )
-    cv2.circle(plate_mask, seed_point, 100, 128, -1)
-    cv2.floodFill(plate_mask, None, seed_point, 255, 0, 0, flags=4)
-    plate_mask[plate_mask < 255] = 0
-    plate_mask = cv2.morphologyEx(plate_mask, cv2.MORPH_CLOSE, mask_inclusion_kernel)
-    plate_mask = cv2.erode(plate_mask, small_kernel, iterations=edge_offset)
     motion_proj[plate_mask == 0] = 0
     stationary[plate_mask == 0] = 0
 
@@ -249,6 +323,42 @@ def count_video(
         video = vis
 
     return n_roaming, n_quiescent, video
+
+def count_simple(
+    video,
+    motion_thresh=1.5,
+    dilation_radius=2,
+    mask_radius=375,
+    return_detail=False
+):
+    residuals, _, _ = fit_pixel_linear_model(video)
+    motion_proj = np.mean(residuals**2, axis=0)
+    mask = create_plate_mask(np.mean(video, axis=0).astype(np.uint8))
+    motion_proj[mask == 0] = 0
+    motion_proj[motion_proj > motion_thresh] = 255
+    motion_proj[motion_proj <= motion_thresh] = 0
+    motion_proj = motion_proj.astype(np.uint8)
+    motion_proj = cv2.dilate(motion_proj, cv2.getStructuringElement(cv2.MORPH_ELLIPSE,(dilation_radius*2+1,dilation_radius*2+1)))
+    num_labels, labels, stats, centroids = cv2.connectedComponentsWithStats(motion_proj)
+    # Detailed data per worm
+    if return_detail:
+        data = []
+        for i, (x, y, w, h, area) in enumerate(stats[1:,:]):
+            # Minimum enclosing circle
+            label_crop = labels[y:y+h, x:x+w]
+            pts = np.argwhere(label_crop == (i + 1))
+            pts = pts[:, ::-1].astype(np.float32)
+            _, radius = cv2.minEnclosingCircle(pts)
+            
+            data.append({
+                'worm_id': i + 1,
+                'distance': 2 * (radius - dilation_radius),
+                'area': area
+                })
+        df = pd.DataFrame(data)
+        return df
+    else:
+        return num_labels - 1
 
 def calculate_relative_metrics(position, direction, test_spot):
     """

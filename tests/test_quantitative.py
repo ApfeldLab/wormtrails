@@ -2,7 +2,7 @@ import unittest
 import numpy as np
 import pandas as pd
 import os
-from wormtrails.quantitative import count_video, measure_chemotaxis
+from wormtrails.quantitative import count_video, measure_chemotaxis, create_plate_mask
 from wormtrails.file_io import read_video_file
 
 class TestQuantitative(unittest.TestCase):
@@ -28,6 +28,14 @@ class TestQuantitative(unittest.TestCase):
         self.assertTrue(isinstance(count, int))
         self.assertGreaterEqual(count, 0)
 
+    def test_create_plate_mask(self):
+        # Create a mock image with a bright center and dark border
+        img = np.zeros((200, 200), dtype=np.uint8)
+        img[50:150, 50:150] = 200
+        mask = create_plate_mask(img)
+        self.assertEqual(mask.shape, (200, 200))
+        self.assertEqual(mask.dtype, np.uint8)
+
     def test_count_young_adults(self):
         video = self.get_test_video("lifespan_plate.avi")
         n_roaming, n_quiescent, vis = count_video(
@@ -39,10 +47,7 @@ class TestQuantitative(unittest.TestCase):
             worm_thresh=5,
             strict_motion_dilation=1,
             stationary_dilation=1,
-            edge_contrast_kernel_size=51,
-            edge_contrast_thresh=10,
-            mask_inclusion_kernel_size=31,
-            edge_offset=3,
+            mask_radius=445,
             return_vis=False
         )
         count = int(n_roaming + n_quiescent)
@@ -62,10 +67,7 @@ class TestQuantitative(unittest.TestCase):
             worm_thresh=5,
             strict_motion_dilation=1,
             stationary_dilation=1,
-            edge_contrast_kernel_size=51,
-            edge_contrast_thresh=10,
-            mask_inclusion_kernel_size=31,
-            edge_offset=3,
+            mask_radius=445,
             return_vis=False
         )
         count = int(n_roaming + n_quiescent)

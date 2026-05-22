@@ -26,6 +26,8 @@ from wormtrails.processing import (
 
 from wormtrails.quantitative import (
     count_video,
+    count_simple,
+    create_plate_mask,
     measure_chemotaxis,
     measure_chemotaxis_parallel,
     calculate_relative_metrics,
