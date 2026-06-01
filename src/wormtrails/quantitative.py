@@ -333,7 +333,7 @@ def count_simple(
 ):
     residuals, _, _ = fit_pixel_linear_model(video)
     motion_proj = np.mean(residuals**2, axis=0)
-    mask = create_plate_mask(np.mean(video, axis=0).astype(np.uint8))
+    mask = create_plate_mask(np.mean(video, axis=0).astype(np.uint8), mask_radius=mask_radius)
     motion_proj[mask == 0] = 0
     motion_proj[motion_proj > motion_thresh] = 255
     motion_proj[motion_proj <= motion_thresh] = 0
