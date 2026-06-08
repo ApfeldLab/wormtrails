@@ -116,12 +116,17 @@ class WormtrailsGUI(tk.Tk):
         self.notebook.add(self.tab_vis, text="Visualizations")
         self.setup_visualization_tab()
 
-        # Tab 2: Count Video
-        self.tab_count = ttk.Frame(self.notebook)
-        self.notebook.add(self.tab_count, text="Count Worms")
-        self.setup_count_tab()
+        # Tab 2: Computer Assisted
+        self.tab_assisted = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_assisted, text="Computer Assisted")
+        self.setup_assisted_tab()
 
-        # Tab 3: Measure Chemotaxis
+        # Tab 3: Computer Automated
+        self.tab_auto = ttk.Frame(self.notebook)
+        self.notebook.add(self.tab_auto, text="Computer Automated")
+        self.setup_automated_tab()
+
+        # Tab 4: Measure Chemotaxis
         self.tab_chemotaxis = ttk.Frame(self.notebook)
         self.notebook.add(self.tab_chemotaxis, text="Measure Chemotaxis")
         self.setup_chemotaxis_tab()
@@ -342,29 +347,95 @@ class WormtrailsGUI(tk.Tk):
         tracks = wts.create_track_array(motion, window=window)
         self.after(0, lambda t=tracks: wts.show_video_array(t))
 
-    # --- Count Tab Setup ---
-    def setup_count_tab(self):
-        desc = tk.Label(self.tab_count, text="Count the number of living worms in the selected video using motion detection.", wraplength=600, justify="left")
+    def _get_calibration(self, px_per_mm_var, fps_var):
+        px = _safe_float(px_per_mm_var.get(), None)
+        fps = _safe_float(fps_var.get(), None)
+        if px is not None and fps is not None:
+            return wts.Calibration(pixels_per_mm=px, frames_per_second=fps)
+        return None
+
+    # --- Computer Assisted Tab (count_assist) ---
+    def setup_assisted_tab(self):
+        desc = tk.Label(self.tab_assisted,
+                        text="Manually mark worms by double-clicking on the video overlay. "
+                             "Hold Shift to add another marker to the same worm.",
+                        wraplength=600, justify="left")
         desc.pack(pady=6, anchor='w', padx=10)
 
+        # Calibration
+        cal_frame = CollapsibleFrame(self.tab_assisted, "Calibration (for physical units)")
+        self._assisted_px_per_mm = tk.StringVar(value="")
+        self._assisted_fps = tk.StringVar(value="")
+        cal_frame.add_label_entry("Pixels per mm:", self._assisted_px_per_mm, row=0)
+        cal_frame.add_label_entry("Frames per second:", self._assisted_fps, row=1)
+        cal_frame.pack(fill='x', padx=6, pady=2)
+
+        # Result and button
+        result_frame = tk.Frame(self.tab_assisted)
+        result_frame.pack(pady=8)
+        self.assisted_result = tk.StringVar(value="")
+        ttk.Label(result_frame, textvariable=self.assisted_result,
+                  font=('Arial', 13, 'bold'), foreground="blue").pack()
+        self._assisted_save_btn = ttk.Button(result_frame, text="Save Markers CSV",
+                                             command=self._save_count_markers, state='disabled')
+        self._assisted_save_btn.pack(pady=2)
+        ttk.Button(result_frame, text="Start Count Assist",
+                   command=lambda: self.measure_action_wrapper(
+                       self._do_count_assist, "Preparing Count Assist...")).pack(pady=4)
+
+    def _do_count_assist(self):
+        video = wts.read_video_file(self.video_path.get())
+        import os
+        filename = os.path.basename(self.video_path.get())
+        cal = self._get_calibration(self._assisted_px_per_mm, self._assisted_fps)
+        def run():
+            df = wts.count_assist(video, window_name=filename, calibration=cal)
+            self._last_count_assist_df = df
+            n = len(df)
+            self.assisted_result.set(f"Manual Count: {n}")
+            self._assisted_save_btn.config(state='normal' if n > 0 else 'disabled')
+        self.after(0, run)
+
+    def _save_count_markers(self):
+        if not hasattr(self, '_last_count_assist_df') or self._last_count_assist_df.empty:
+            return
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv")],
+            title="Save Marker Coordinates"
+        )
+        if save_path:
+            self._last_count_assist_df.to_csv(save_path, index=False)
+            messagebox.showinfo("Success", f"Saved to {save_path}")
+
+    # --- Computer Automated Tab (count_video + count_simple) ---
+    def setup_automated_tab(self):
+        desc = tk.Label(self.tab_auto,
+                        text="Automatically count worms using motion detection.",
+                        wraplength=600, justify="left")
+        desc.pack(pady=6, anchor='w', padx=10)
+
+        # --- count_video section ---
+        video_frame = ttk.LabelFrame(self.tab_auto, text="Count Video (roaming / quiescent)")
+        video_frame.pack(fill='x', padx=10, pady=4)
+
         # Basic params
-        basic = ttk.LabelFrame(self.tab_count, text="Basic Parameters")
-        basic.pack(fill='x', padx=10, pady=4)
+        basic = ttk.Frame(video_frame)
+        basic.pack(fill='x', padx=6, pady=4)
         ttk.Label(basic, text="Min Worm Area:").grid(row=0, column=0, padx=6, pady=4, sticky='e')
         self.count_min = tk.IntVar(value=20)
         ttk.Entry(basic, textvariable=self.count_min, width=10).grid(row=0, column=1, padx=4, pady=4, sticky='w')
-
         ttk.Label(basic, text="Max Worm Area:").grid(row=1, column=0, padx=6, pady=4, sticky='e')
         self.count_max = tk.IntVar(value=300)
         ttk.Entry(basic, textvariable=self.count_max, width=10).grid(row=1, column=1, padx=4, pady=4, sticky='w')
 
         # Advanced params (collapsible)
-        adv = CollapsibleFrame(self.tab_count, "Advanced Parameters")
+        adv = CollapsibleFrame(video_frame, "Advanced Parameters")
         self._count_mwl = tk.StringVar(value="30")
         self._count_wks = tk.StringVar(value="11")
         self._count_wt = tk.StringVar(value="5")
-        self._count_mt = tk.StringVar(value="")  # empty = auto (None -> Otsu)
-        self._count_smt = tk.StringVar(value="")  # empty = auto
+        self._count_mt = tk.StringVar(value="")
+        self._count_smt = tk.StringVar(value="")
         self._count_smd = tk.StringVar(value="1")
         self._count_sd = tk.StringVar(value="1")
         self._count_mr = tk.StringVar(value="375")
@@ -378,31 +449,47 @@ class WormtrailsGUI(tk.Tk):
         adv.add_label_entry("Stationary Dilation:", self._count_sd, row=6)
         adv.add_label_entry("Mask Radius:", self._count_mr, row=7)
         adv.add_checkbutton("Return Visualization", self._count_vis, row=8)
-        adv.pack(fill='x', padx=6, pady=2)
+        adv.pack(fill='x', padx=4, pady=2)
 
-        # Progress
-        self.count_progress = ProgressLabel(self.tab_count)
+        ttk.Button(video_frame, text="Run Count Video",
+                   command=lambda: self.measure_action_wrapper(
+                       self._do_count, "Counting worms...")).pack(pady=6)
 
-        # Calibration (collapsible)
-        cal_frame = CollapsibleFrame(self.tab_count, "Calibration (for physical units)")
-        self._count_px_per_mm = tk.StringVar(value="")
-        self._count_fps = tk.StringVar(value="")
-        cal_frame.add_label_entry("Pixels per mm:", self._count_px_per_mm, row=0)
-        cal_frame.add_label_entry("Frames per second:", self._count_fps, row=1)
-        cal_frame.pack(fill='x', padx=6, pady=2)
+        # --- count_simple section ---
+        simple_frame = ttk.LabelFrame(self.tab_auto, text="Count Simple (trail distances)")
+        simple_frame.pack(fill='x', padx=10, pady=4)
 
-        # Result and button
-        result_frame = tk.Frame(self.tab_count)
-        result_frame.pack(pady=8)
-        self.count_result = tk.StringVar(value="")
-        ttk.Label(result_frame, textvariable=self.count_result, font=('Arial', 13, 'bold'), foreground="blue").pack()
-        self._count_save_btn = ttk.Button(result_frame, text="Save Markers CSV",
-                                          command=self._save_count_markers, state='disabled')
-        self._count_save_btn.pack(pady=2)
-        ttk.Button(result_frame, text="Count Worms",
-                   command=lambda: self.measure_action_wrapper(self._do_count, "Counting worms...")).pack(pady=4)
-        ttk.Button(result_frame, text="Count Assist (Manual)",
-                   command=lambda: self.measure_action_wrapper(self._do_count_assist, "Preparing Count Assist...")).pack(pady=4)
+        sf = ttk.Frame(simple_frame)
+        sf.pack(fill='x', padx=6, pady=4)
+        ttk.Label(sf, text="Motion Threshold:").grid(row=0, column=0, padx=6, pady=4, sticky='e')
+        self._simple_mt = tk.StringVar(value="1.5")
+        ttk.Entry(sf, textvariable=self._simple_mt, width=10).grid(row=0, column=1, padx=4, pady=4, sticky='w')
+        ttk.Label(sf, text="Dilation Radius:").grid(row=1, column=0, padx=6, pady=4, sticky='e')
+        self._simple_dr = tk.StringVar(value="2")
+        ttk.Entry(sf, textvariable=self._simple_dr, width=10).grid(row=1, column=1, padx=4, pady=4, sticky='w')
+        ttk.Label(sf, text="Mask Radius:").grid(row=2, column=0, padx=6, pady=4, sticky='e')
+        self._simple_mr = tk.StringVar(value="375")
+        ttk.Entry(sf, textvariable=self._simple_mr, width=10).grid(row=2, column=1, padx=4, pady=4, sticky='w')
+        self._simple_detail = tk.BooleanVar(value=True)
+        ttk.Checkbutton(sf, text="Return details (distances / areas)",
+                        variable=self._simple_detail).grid(row=3, column=0, columnspan=2, padx=6, pady=2, sticky='w')
+
+        cal_frame = CollapsibleFrame(simple_frame, "Calibration (for physical units)")
+        self._auto_px_per_mm = tk.StringVar(value="")
+        self._auto_fps = tk.StringVar(value="")
+        cal_frame.add_label_entry("Pixels per mm:", self._auto_px_per_mm, row=0)
+        cal_frame.add_label_entry("Frames per second:", self._auto_fps, row=1)
+        cal_frame.pack(fill='x', padx=4, pady=2)
+
+        ttk.Button(simple_frame, text="Run Count Simple",
+                   command=lambda: self.measure_action_wrapper(
+                       self._do_count_simple, "Counting simple...")).pack(pady=6)
+
+        # Shared progress & result
+        self.auto_progress = ProgressLabel(self.tab_auto)
+        self.auto_result = tk.StringVar(value="")
+        ttk.Label(self.tab_auto, textvariable=self.auto_result,
+                  font=('Arial', 13, 'bold'), foreground="blue").pack(pady=6)
 
     def _get_count_params(self):
         return {
@@ -420,47 +507,40 @@ class WormtrailsGUI(tk.Tk):
         }
 
     def _do_count(self):
-        def update_result(val):
-            self.count_result.set(val)
-
         video = wts.read_video_file(self.video_path.get())
         n_roaming, n_stationary, vis = wts.count_video(video, **self._get_count_params())
-
-        self.after(0, lambda: update_result(f"Roaming: {n_roaming}   Stationary: {n_stationary}"))
-
+        self.after(0, lambda: self.auto_result.set(
+            f"Roaming: {n_roaming}   Stationary: {n_stationary}"))
         if self._count_vis.get():
             self.after(0, lambda: wts.show_video_array(vis))
 
-    def _get_calibration(self, px_per_mm_var, fps_var):
-        px = _safe_float(px_per_mm_var.get(), None)
-        fps = _safe_float(fps_var.get(), None)
-        if px is not None and fps is not None:
-            return wts.Calibration(pixels_per_mm=px, frames_per_second=fps)
-        return None
-
-    def _do_count_assist(self):
+    def _do_count_simple(self):
         video = wts.read_video_file(self.video_path.get())
-        import os
-        filename = os.path.basename(self.video_path.get())
-        cal = self._get_calibration(self._count_px_per_mm, self._count_fps)
-        def run():
-            df = wts.count_assist(video, window_name=filename, calibration=cal)
-            self._last_count_assist_df = df
+        cal = self._get_calibration(self._auto_px_per_mm, self._auto_fps)
+        detail = self._simple_detail.get()
+        df = wts.count_simple(
+            video,
+            motion_thresh=_safe_float(self._simple_mt.get(), 1.5),
+            dilation_radius=_safe_int(self._simple_dr.get(), 2),
+            mask_radius=_safe_int(self._simple_mr.get(), 375),
+            return_detail=detail,
+            calibration=cal,
+        )
+        if detail:
             n = len(df)
-            self.count_result.set(f"Manual Count: {n}")
-            self._count_save_btn.config(state='normal' if n > 0 else 'disabled')
-        self.after(0, run)
+            self.after(0, lambda d=df: self._auto_save_simple(d, n))
+        else:
+            self.after(0, lambda: self.auto_result.set(f"Worms detected: {df}"))
 
-    def _save_count_markers(self):
-        if not hasattr(self, '_last_count_assist_df') or self._last_count_assist_df.empty:
-            return
+    def _auto_save_simple(self, df, n):
+        self.auto_result.set(f"Worm trails detected: {n}")
         save_path = filedialog.asksaveasfilename(
             defaultextension=".csv",
             filetypes=[("CSV Files", "*.csv")],
-            title="Save Marker Coordinates"
+            title="Save Count Simple Results"
         )
         if save_path:
-            self._last_count_assist_df.to_csv(save_path, index=False)
+            df.to_csv(save_path, index=False)
             messagebox.showinfo("Success", f"Saved to {save_path}")
 
     # --- Chemotaxis Tab Setup ---
