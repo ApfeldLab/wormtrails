@@ -36,6 +36,15 @@ from wormtrails.quantitative import (
     measure_window
 )
 
+from wormtrails.database import (
+    create_database,
+    write_measurements,
+    read_measurements,
+    add_recording,
+    list_tables,
+    SCHEMA
+)
+
 from wormtrails.colormaps import (
     white_to_black,
     black_to_white,
