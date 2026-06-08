@@ -1,6 +1,8 @@
 import cv2
 import numpy as np
 
+__all__ = ['read_video_file', 'write_mp4', 'write_avi']
+
 def read_video_file(video_path):
     """
     Reads a video file and returns a 3D Numpy array containing the video frames, with time as axis 0.
@@ -21,8 +23,10 @@ def read_video_file(video_path):
     if not cap.isOpened():
         raise ValueError(f"Unable to open video file: {video_path}")
     
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     frames = []
 
+    frame_idx = 0
     while True:
         ret, frame = cap.read()
         if not ret:
@@ -31,8 +35,16 @@ def read_video_file(video_path):
         # Convert frame to greyscale
         grey_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         frames.append(grey_frame.astype(np.uint8))
+        frame_idx += 1
         
     cap.release()
+    
+    if total_frames > 0 and len(frames) < total_frames:
+        import warnings
+        warnings.warn(
+            f"Only {len(frames)} of {total_frames} frames read successfully. "
+            "The video file may contain corrupt frames."
+        )
         
     # Convert list of frames to a 3D NumPy array
     video_array = np.stack(frames, axis=0)
@@ -62,6 +74,12 @@ def write_mp4(video_array, out_path, fps=60):
     # Define the codec and create VideoWriter object
     fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec for .mp4
     out = cv2.VideoWriter(out_path, fourcc, fps, (width, height), isColor=isColor)
+
+    if not out.isOpened():
+        raise RuntimeError(
+            f"Could not open video writer for {out_path}. "
+            "The 'mp4v' codec may not be available in this OpenCV build."
+        )
 
     for i in range(num_frames):
         frame = video_array[i]
@@ -100,6 +118,12 @@ def write_avi(video_array, out_path, fps=60):
     # Define the codec and create VideoWriter object
     fourcc = cv2.VideoWriter_fourcc(*'FFV1')  # Codec for lossless .avi
     out = cv2.VideoWriter(out_path, fourcc, fps, (width, height), isColor=isColor)
+
+    if not out.isOpened():
+        raise RuntimeError(
+            f"Could not open video writer for {out_path}. "
+            "The 'FFV1' codec may not be available in this OpenCV build."
+        )
 
     for i in range(num_frames):
         frame = video_array[i]

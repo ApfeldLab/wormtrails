@@ -1,9 +1,21 @@
 import cv2
 import numpy as np
-import math
 from joblib import Parallel, delayed
 
-def correct_vignetting(array, kernel_size=None, use_median_blur=True, inPlace=False):
+__all__ = [
+    'correct_vignetting',
+    'subtract_average',
+    'fit_pixel_linear_model',
+    'create_track_array',
+    'create_time_encoded_array',
+    'create_time_encoded_array_parallel',
+    'create_time_encoded_frame',
+    'create_time_encoded_frame_vectorized',
+    'add_timestamp',
+    'align_frames',
+]
+
+def correct_vignetting(array, kernel_size=None, use_median_blur=True, in_place=False):
     """
     Corrects vignetting in a video array by normalizing each frame to have the same brightness as the average frame and dividing by a blur of the average frame.
     If a single frame (2D array) is provided, the frame brightness adjustment step is skipped since no normalization is needed.
@@ -12,14 +24,14 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=True, inPlace=Fa
 
     Args:
         array: 2D or 3D Numpy array containing the video frames. If 3D, time is axis 0. For 2D arrays, only vignetting correction (no brightness adjustment) is applied.
-        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame. If None (default), the kernel size is calculated as one quarter the image width, rounded up and made odd.
+        kernel_size: Odd integer value for the kernel size used to create the blur of the average frame. If None (default), the kernel size is calculated as one quarter the smaller image dimension (min of width or height), rounded up and made odd.
         use_median_blur: Boolean value. If True (default), uses a median filter to create the blurred frame for background brightness estimation. If False, uses Gaussian blur.
-        inPlace: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
+        in_place: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
 
     Returns:
-        video_array: 2D or 3D Numpy array of 8 bit unsigned integers (uint8) containing the corrected video frames. Returns None if inPlace=True.
+        video_array: 2D or 3D Numpy array of 8 bit unsigned integers (uint8) containing the corrected video frames. Returns None if in_place=True.
     """
-    if not inPlace:
+    if not in_place:
         array = array.copy()
 
     # Handle 2D and 3D arrays by wrapping 2D in a new axis for unified processing
@@ -30,7 +42,7 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=True, inPlace=Fa
         average_frame = np.mean(array, axis=0)
     
     if kernel_size is None:
-        kernel_size = int(average_frame.shape[0]/8) * 2 + 1 # Kernel size is one quarter the image height
+        kernel_size = int(min(average_frame.shape[:2])/8) * 2 + 1 # Kernel size is one quarter the smaller image dimension
     if use_median_blur:
         blur_frame = cv2.medianBlur(average_frame.astype(np.uint8), kernel_size)
     else:
@@ -54,10 +66,10 @@ def correct_vignetting(array, kernel_size=None, use_median_blur=True, inPlace=Fa
             # divide each frame by the blur of the average frame to correct vignetting or other large scale brightness variations
             array[i] = (scaled_frame * target_brightness / blur_frame).astype(np.uint8)
 
-    if not inPlace:
+    if not in_place:
         return array
 
-def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_difference=True, use_projection=False, light_background=True, inPlace=False):
+def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_difference=True, use_projection=False, light_background=True, in_place=False):
     """
     Subtracts the average frame or min/max projected frame from each frame in the video array.
     This effectively only shows pixels which change in value over the course of the recording.
@@ -71,12 +83,12 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
         use_absolute_difference: Boolean value. If True, uses absolute difference between scaled frames and average, making motion symmetric. If False, uses one-sided subtraction based on light_background.
         use_projection: Boolean value. If True, uses a min/max projection instead of mean for the average frame, which is useful when stationary background elements need to be preserved.
         light_background: Boolean value. If True, assumes dark worms on light background and uses inverted subtraction. If False, assumes bright objects on dark background.
-        inPlace: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
+        in_place: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
 
     Returns:
-        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the subtracted video frames with only motion visible, with time as axis 0. Returns None if inPlace=True.
+        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the subtracted video frames with only motion visible, with time as axis 0. Returns None if in_place=True.
     """
-    if not inPlace:
+    if not in_place:
         video_array = video_array.copy()
 
     if average_end == -1:
@@ -109,14 +121,14 @@ def subtract_average(video_array, average_start=0, average_end=-1, use_absolute_
         else:
             video_array[i] = np.clip(scaled_frame - average_frame, 0, None).astype(np.uint8)
 
-    if not inPlace:
+    if not in_place:
         return video_array
 
 def fit_pixel_linear_model(video: np.ndarray):
     """
     Fit a linear model to each pixel's intensity over time.
 
-    Returns residual sum of squares (RSS), slope, and intercept for each pixel.
+    Returns residual array, slope, and intercept for each pixel.
 
     Parameters
     ----------
@@ -196,10 +208,12 @@ def create_time_encoded_array(average_subtracted_array, colormap=np.array([[0,0,
     Notes:
         Only returns arrays up to the last frame where a complete window fits.
 
-        Warning: due to double inversion, switching light_background from True to False (or vice versa)
-        produces the same output for a given colormap. To get the complementary temporal ordering,
-        use the opposite colormap (e.g. swap white_to_black for black_to_white) when flipping
-        light_background.
+        When using symmetric (grayscale) colormaps such as white_to_black or black_to_white,
+        flipping light_background is equivalent to using the opposite colormap.
+        For asymmetric colormaps (e.g. blue_to_red), light_background flips the color channel
+        values, producing visually distinct (complementary) output rather than identical results.
+        To reverse temporal ordering regardless of colormap, swap it for its inverse
+        (e.g. blue_to_red for red_to_blue, white_to_black for black_to_white).
     """
     
     time_encoded_array = []
@@ -263,10 +277,12 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
     Notes:
         Uses numpy minimum/maximum projection to combine trail information from multiple frames.
 
-        Warning: due to double inversion, switching light_background from True to False (or vice versa)
-        produces the same output for a given colormap. To get the complementary temporal ordering,
-        use the opposite colormap (e.g. swap white_to_black for black_to_white) when flipping
-        light_background.
+        When using symmetric (grayscale) colormaps such as white_to_black or black_to_white,
+        flipping light_background is equivalent to using the opposite colormap.
+        For asymmetric colormaps (e.g. blue_to_red), light_background flips the color channel
+        values, producing visually distinct (complementary) output rather than identical results.
+        To reverse temporal ordering regardless of colormap, swap it for its inverse
+        (e.g. blue_to_red for red_to_blue, white_to_black for black_to_white).
     """
     time_encoded_frame = None
 
@@ -312,10 +328,12 @@ def create_time_encoded_frame_vectorized(average_subtracted_array, colormap=np.a
     Notes:
         Uses numpy minimum/maximum projection to combine trail information from multiple frames.
 
-        Warning: due to double inversion, switching light_background from True to False (or vice versa)
-        produces the same output for a given colormap. To get the complementary temporal ordering,
-        use the opposite colormap (e.g. swap white_to_black for black_to_white) when flipping
-        light_background.
+        When using symmetric (grayscale) colormaps such as white_to_black or black_to_white,
+        flipping light_background is equivalent to using the opposite colormap.
+        For asymmetric colormaps (e.g. blue_to_red), light_background flips the color channel
+        values, producing visually distinct (complementary) output rather than identical results.
+        To reverse temporal ordering regardless of colormap, swap it for its inverse
+        (e.g. blue_to_red for red_to_blue, white_to_black for black_to_white).
     """
     time_encoded_frame = None
 
@@ -344,7 +362,7 @@ def create_time_encoded_frame_vectorized(average_subtracted_array, colormap=np.a
 
     return time_encoded_frame
 
-def add_timestamp(video_array, black_background=True, font_scale=1, font_thickness=1, seconds_per_frame=1, inPlace=False):
+def add_timestamp(video_array, black_background=True, font_scale=2, font_thickness=2, seconds_per_frame=1, in_place=False):
     """
     Adds a timestamp to each frame of the video array.
     This should be done last in the processing pipeline, after time encoding returns a color array.
@@ -352,19 +370,19 @@ def add_timestamp(video_array, black_background=True, font_scale=1, font_thickne
     Args:
         video_array: 4D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with shape (time, height, width, 3), where time is axis 0 and color channels are the last axis.
         black_background: Boolean value. If True, uses white text on the assumption of a black background. If False, uses black text for a light background.
-        font_scale: Float value for the OpenCV font scale. Controls the size of the timestamp text. Default is 1.
-        font_thickness: Integer value for the OpenCV font thickness. Default is 1.
+        font_scale: Float value for the OpenCV font scale. Controls the size of the timestamp text. Default is 2.
+        font_thickness: Integer value for the OpenCV font thickness. Default is 2.
         seconds_per_frame: Float value for the frame time in seconds. This is the actual captured frame time (not the desired export frame time). Default is 1 second per frame.
-        inPlace: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
+        in_place: Boolean value. If True, modifies the original array in place and returns None. If False (default), creates a copy and returns the copy.
 
     Returns:
-        video_array: 4D Numpy array of 8 bit unsigned integers (uint8) containing the video frames with timestamps in bottom-left corner, with time as axis 0 and color channel as axis 3 (last axis). Returns None if inPlace=True.
+        video_array: 4D Numpy array of 8 bit unsigned integers (uint8) containing the video frames with timestamps in bottom-left corner, with time as axis 0 and color channel as axis 3 (last axis). Returns None if in_place=True.
 
     Notes:
         Only accepts color (3-channel) input since cv2.putText requires a color image.
         Timestamps are formatted as MM:SS and placed in the bottom-left corner of each frame.
     """
-    if not inPlace:
+    if not in_place:
         video_array = video_array.copy()
 
     num_frames, height, width, channel = video_array.shape # only accepts color input, since the cv2.putText function requires a color image
@@ -381,7 +399,7 @@ def add_timestamp(video_array, black_background=True, font_scale=1, font_thickne
         timestamp = f"{(total_seconds // 60):02d}:{(total_seconds % 60):02d}" # Timestamp format mm:ss
         cv2.putText(video_array[i], timestamp, position, font, font_scale, (color, color, color), font_thickness)
 
-    if not inPlace:
+    if not in_place:
         return video_array
 
 def align_frames(ref, target):

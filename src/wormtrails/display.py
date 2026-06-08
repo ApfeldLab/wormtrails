@@ -3,6 +3,13 @@ import numpy as np
 import pandas as pd
 from .processing import create_time_encoded_frame, fit_pixel_linear_model
 
+__all__ = [
+    'show_video_array',
+    'show_frame',
+    'show_time_encoding',
+    'count_assist',
+]
+
 def show_video_array(video_array, window_name='esc to exit'):
     """
     Displays a video array in a window with a trackbar to scroll through frames.
@@ -116,10 +123,12 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
         offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise.
         light_background: Boolean value. If True, assumes dark trails on light background. If False, assumes bright trails on dark background.
 
-        Warning: due to double inversion, switching light_background from True to False (or vice versa)
-        produces the same output for a given colormap. To get the complementary temporal ordering,
-        use the opposite colormap (e.g. swap white_to_black for black_to_white) when flipping
-        light_background.
+        When using symmetric (grayscale) colormaps such as white_to_black or black_to_white,
+        flipping light_background is equivalent to using the opposite colormap.
+        For asymmetric colormaps (e.g. blue_to_red), light_background flips the color channel
+        values, producing visually distinct (complementary) output rather than identical results.
+        To reverse temporal ordering regardless of colormap, swap it for its inverse
+        (e.g. blue_to_red for red_to_blue, white_to_black for black_to_white).
     """
     
     num_frames = average_subtracted_array.shape[0]
@@ -199,14 +208,26 @@ def count_assist(video_array, window_name='count assist', calibration=None):
     motion_proj = np.mean(residuals**2, axis=0)
     motion_proj[motion_proj < 1] = 1
     motion_proj = np.log2(motion_proj.astype(np.float64))
-    motion_proj *= 255 / np.max(motion_proj)
+    max_motion = np.max(motion_proj)
+    if max_motion == 0:
+        raise ValueError(
+            "All frames are identical — no motion detected. "
+            "Cannot compute motion overlay for count_assist."
+        )
+    motion_proj *= 255 / max_motion
     motion_proj = np.clip(motion_proj, 0, 255).astype(np.uint8)
 
     time_derivative = video_array.copy().astype(np.float16)[1:] - video_array.copy().astype(np.float16)[:-1]
     time_derivative = np.abs(time_derivative)
     time_derivative[time_derivative < 1] = 1
     time_derivative = np.log2(time_derivative)
-    time_derivative *= 255 / np.max(time_derivative)
+    max_motion = np.max(time_derivative)
+    if max_motion == 0:
+        raise ValueError(
+            "All frames are identical — no motion detected. "
+            "Cannot compute motion overlay for count_assist."
+        )
+    time_derivative *= 255 / max_motion
     time_derivative = np.clip(time_derivative, 0, 255).astype(np.uint8)
 
     overlay_video = []

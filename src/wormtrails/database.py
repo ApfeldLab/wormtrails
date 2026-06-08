@@ -21,6 +21,15 @@ import sqlite3
 from pathlib import Path
 import pandas as pd
 
+__all__ = [
+    'create_database',
+    'write_measurements',
+    'read_measurements',
+    'add_recording',
+    'list_tables',
+    'SCHEMA',
+]
+
 
 # ---------------------------------------------------------------------------
 # Schema templates — used by create_database() and write_measurements()
@@ -246,6 +255,21 @@ def list_tables(db_path):
 
 
 def _ensure_table(conn, table_name):
-    """Create *table_name* from the schema template if it doesn't exist."""
+    """Create *table_name* from the schema template if it doesn't exist.
+
+    Raises a KeyError if *table_name* is not a recognised schema table and
+    does not already exist, to prevent silent misconfiguration.
+    """
     if table_name in SCHEMA:
         conn.execute(SCHEMA[table_name])
+    else:
+        cur = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name=?",
+            (table_name,),
+        )
+        if not cur.fetchone():
+            raise KeyError(
+                f"Unknown table '{table_name}'. "
+                f"Predefined tables: {', '.join(SCHEMA.keys())}. "
+                "To create an ad-hoc table, call pandas.to_sql directly on the connection."
+            )

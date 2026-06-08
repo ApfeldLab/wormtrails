@@ -11,12 +11,12 @@ class TestProcessing(unittest.TestCase):
             self.video[i, 30+i*2:40+i*2, 30+i*2:40+i*2] = 50
     
     def test_correct_vignetting(self):
-        result = correct_vignetting(self.video, kernel_size=11, inPlace=False)
+        result = correct_vignetting(self.video, kernel_size=11, in_place=False)
         self.assertEqual(result.shape, self.video.shape)
         self.assertEqual(result.dtype, np.uint8)
 
     def test_subtract_average(self):
-        result = subtract_average(self.video, use_absolute_difference=True, inPlace=False)
+        result = subtract_average(self.video, use_absolute_difference=True, in_place=False)
         self.assertEqual(result.shape, self.video.shape)
         # Check that there's motion in the array
         self.assertTrue(np.max(result) > 0)
@@ -26,8 +26,8 @@ class TestProcessing(unittest.TestCase):
         self.assertEqual(result.shape, self.video.shape)
 
     def test_full_pipeline(self):
-        corrected = correct_vignetting(self.video, kernel_size=11, inPlace=False)
-        motion = subtract_average(corrected, use_absolute_difference=True, inPlace=False)
+        corrected = correct_vignetting(self.video, kernel_size=11, in_place=False)
+        motion = subtract_average(corrected, use_absolute_difference=True, in_place=False)
         time_encoded = create_time_encoded_array(motion, window=5)
         self.assertEqual(time_encoded.shape, (5, 200, 200, 3))
         self.assertTrue(np.max(time_encoded) > 0)

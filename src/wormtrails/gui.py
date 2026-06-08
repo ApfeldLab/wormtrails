@@ -10,6 +10,8 @@ import threading
 import wormtrails as wts
 from wormtrails.processing import create_time_encoded_frame, fit_pixel_linear_model, subtract_average
 
+__all__ = ['main']
+
 
 class ProgressLabel(tk.Label):
     """Label that can be updated from a background thread via self.after()."""
@@ -39,8 +41,10 @@ class CollapsibleFrame(ttk.Frame):
 
     def toggle(self):
         self._visible = not self._visible
-        state = 'normal' if self._visible else 'hidden'
-        self._content.pack_forget() if not self._visible else self._content.pack(fill='both', expand=True)
+        if self._visible:
+            self._content.pack(fill='both', expand=True)
+        else:
+            self._content.pack_forget()
         self._toggle_btn.config(text=f"{'[-]' if self._visible else '[+]'} " + self._toggle_btn.cget('text')[4:])
 
     def row_configure(self, idx, **kw):
@@ -644,11 +648,14 @@ class WormtrailsGUI(tk.Tk):
         motion[motion > thresh_val] = 255
         motion[motion <= thresh_val] = 0
 
-        bx = self.chemo_bait_x.get()
-        by = self.chemo_bait_y.get()
+        bx = self.chemo_bait_x.get().strip()
+        by = self.chemo_bait_y.get().strip()
         test_spot = None
-        if bx.isdigit() and by.isdigit():
-            test_spot = (int(by), int(bx))
+        if bx and by:
+            try:
+                test_spot = (float(by), float(bx))
+            except ValueError:
+                messagebox.showwarning("Invalid Input", "Bait spot coordinates must be numeric.")
 
         cal = self._get_calibration(self._chemo_px_per_mm, self._chemo_fps)
         df = wts.measure_chemotaxis(
@@ -675,6 +682,15 @@ class WormtrailsGUI(tk.Tk):
 
 
 def main():
+    """Launch the Wormtrails GUI application.
+
+    Notes
+    -----
+    Playback actions (Play Original Video, Preview Time Encoding, etc.) open
+    OpenCV highgui windows that enter their own event loop.  While such a
+    window is open the Tkinter main thread is blocked and the GUI becomes
+    unresponsive.  Close the OpenCV window to regain control of the GUI.
+    """
     app = WormtrailsGUI()
     app.mainloop()
 
