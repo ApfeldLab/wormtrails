@@ -130,16 +130,19 @@ def fit_pixel_linear_model(video: np.ndarray):
 
     Returns residual array, slope, and intercept for each pixel.
 
-    Parameters
-    ----------
-    video : np.ndarray, shape (T, H, W)
+    Args:
+        video: 3D Numpy array of shape (T, H, W) containing the video frames,
+            with time as axis 0.
 
-    Returns
-    -------
-    residuals : np.ndarray, shape (T, H, W)
-        Residuals for each pixel (float16).
-    slope : np.ndarray, shape (H, W)
-    intercept : np.ndarray, shape (H, W)
+    Returns:
+        residuals: 3D Numpy array of shape (T, H, W) containing the residuals
+            for each pixel (float16).
+        slope: 2D Numpy array of shape (H, W) (float64).
+        intercept: 2D Numpy array of shape (H, W) (float64).
+
+    Raises:
+        ValueError: If the input array is not 3D.
+        ValueError: If fewer than 2 frames are provided.
     """
     if video.ndim != 3:
         raise ValueError("Input video must be a 3D array (T, H, W)")
@@ -199,7 +202,7 @@ def create_time_encoded_array(average_subtracted_array, colormap=np.array([[0,0,
         colormap: Numpy array of shape (N, 3) containing the colormap colors (B, G, R values 0-255), applied to each trail frame to encode temporal information.
         window: Integer value for the window size (number of frames to look back) used to create trails. Shorter windows take less processing time and enhance speed perception.
         scale_factor: Float value for the scaling factor, applied to the trails to adjust brightness. Higher values increase contrast. Default is 1.
-        offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
+        offset: Integer or float value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
         light_background: Boolean value. If True, assumes dark trails on light background and inverts the trail rendering. If False, assumes bright trails on dark background.
 
     Returns:
@@ -233,16 +236,16 @@ def create_time_encoded_array_parallel(average_subtracted_array, colormap=np.arr
     (below the threshold) to avoid parallelization overhead.
     
     Args:
-        average_subtracted_array: 3D Numpy array (T, H, W) of uint8.
+        average_subtracted_array: 3D Numpy array of shape (T, H, W) of uint8.
         colormap: Numpy array of shape (N, 3) with BGR color values.
-        window: Window size for trail creation.
+        window: Window size for trail creation (default: 20).
         scale_factor: Brightness scaling factor (default: 1).
-        offset: Brightness offset (default: 0).
+        offset: Integer or float brightness offset (default: 0).
         light_background: Light background flag (default: True).
         n_jobs: Number of parallel workers (-1 for all cores, default: -1).
         
     Returns:
-        4D Numpy array (n_frames, H, W, 3) of uint8.
+        time_encoded_array: 4D Numpy array of shape (n_frames, H, W, 3) of uint8.
     """
     n_frames = average_subtracted_array.shape[0] - window
     
@@ -268,7 +271,7 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
         window: Integer value for the window size (number of frames to look back), used to create trails. Shorter windows take less processing time.
         start_time: Integer value for the start time of the frame. The window starts at this frame and continues forward for the specified window size.
         scale_factor: Float value for the scaling factor, applied to the trails to adjust brightness. Higher values increase contrast. Default is 1.
-        offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
+        offset: Integer or float value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
         light_background: Boolean value. If True, assumes dark trails on light background and inverts the trail rendering. If False, assumes bright trails on dark background.
 
     Returns:
@@ -319,7 +322,7 @@ def create_time_encoded_frame_vectorized(average_subtracted_array, colormap=np.a
         window: Integer value for the window size (number of frames to look back), used to create trails. Shorter windows take less processing time.
         start_time: Integer value for the start time of the frame. The window starts at this frame and continues forward for the specified window size.
         scale_factor: Float value for the scaling factor, applied to the trails to adjust brightness. Higher values increase contrast. Default is 1.
-        offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
+        offset: Integer or float value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
         light_background: Boolean value. If True, assumes dark trails on light background and inverts the trail rendering. If False, assumes bright trails on dark background.
 
     Returns:
@@ -381,6 +384,7 @@ def add_timestamp(video_array, black_background=True, font_scale=2, font_thickne
     Notes:
         Only accepts color (3-channel) input since cv2.putText requires a color image.
         Timestamps are formatted as MM:SS and placed in the bottom-left corner of each frame.
+        Input array must have 4 dimensions (time, height, width, channels) with 3 channels.
     """
     if not in_place:
         video_array = video_array.copy()

@@ -1,3 +1,11 @@
+"""
+wormtrails — analyse and visualise C. elegans motion on solid media.
+
+Provides video I/O, vignetting correction, background subtraction,
+time-encoded trail visualisation, automatic worm counting, chemotaxis
+measurement, and an optional SQLite storage backend.
+"""
+
 from wormtrails.file_io import (
     read_video_file,
     write_mp4,

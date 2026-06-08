@@ -61,6 +61,9 @@ def write_mp4(video_array, out_path, fps=60):
 
     Returns:
         None. Prints a confirmation message when video writing completes.
+
+    Raises:
+        RuntimeError: If the video writer cannot be opened, typically because the 'mp4v' codec is not available in the current OpenCV build.
     """
     
     num_frames = video_array.shape[0]
@@ -105,6 +108,9 @@ def write_avi(video_array, out_path, fps=60):
 
     Returns:
         None. Prints a confirmation message when video writing completes.
+
+    Raises:
+        RuntimeError: If the video writer cannot be opened, typically because the 'FFV1' codec is not available in the current OpenCV build.
     """
     
     num_frames = video_array.shape[0]

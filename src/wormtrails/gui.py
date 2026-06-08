@@ -89,6 +89,7 @@ def _safe_float(val, default):
 
 class WormtrailsGUI(tk.Tk):
     def __init__(self):
+        """Initialise the Wormtrails GUI with default window size and state."""
         super().__init__()
         self.title("Wormtrails Analysis & Visualization")
         self.geometry("720x700")
@@ -99,6 +100,7 @@ class WormtrailsGUI(tk.Tk):
         self.create_widgets()
 
     def create_widgets(self):
+        """Build the file browser, notebook tabs, and status bar."""
         # Top Frame for file loading
         file_frame = tk.Frame(self)
         file_frame.pack(pady=6, fill='x', padx=10)
@@ -248,6 +250,18 @@ class WormtrailsGUI(tk.Tk):
         }
 
     def _compute_motion(self, video, method, sub_params):
+        """Compute a motion-detection array from a video.
+
+        Args:
+            video: 3D Numpy array of uint8 video frames, shape (T, H, W).
+            method: Either ``'subtract_average'`` or ``'linear_model_residuals'``.
+            sub_params: Keyword arguments forwarded to
+                :func:`wormtrails.processing.subtract_average`, used only when
+                *method* is ``'subtract_average'``.
+
+        Returns:
+            3D Numpy array of uint8 highlighting pixel-level motion.
+        """
         if method == "linear_model_residuals":
             residuals, _, _ = fit_pixel_linear_model(video)
             residuals[residuals > 0] = 0  # only negative residuals for dark worms on light background

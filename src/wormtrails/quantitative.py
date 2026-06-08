@@ -56,6 +56,14 @@ def _find_concentric_center(image, mask_radius):
     that is of a similar or larger size to the mask_radius.
     
     If no circular feature is found, defaults to the center of the image.
+
+    Args:
+        image: 2D Numpy array of uint8.
+        mask_radius: Expected radius of the circular feature in pixels.
+
+    Returns:
+        cx: Integer x-coordinate of the estimated center.
+        cy: Integer y-coordinate of the estimated center.
     """
     h, w = image.shape[:2]
     
@@ -167,7 +175,7 @@ def count_video(
         worm_kernel_size: Kernel size for adaptive thresholding to detect worm bodies. Default is 11.
         worm_thresh: Threshold offset for adaptive thresholding. Default is 5.
         motion_thresh: Motion threshold for the log-scaled motion projection. If None, computed via Otsu from the log-motion distribution. Default is None.
-        strict_motion_thresh: Higher strict motion threshold. If None, computed as motion_thresh + 0.5 (after Otsu). Default is None.
+        strict_motion_thresh: Higher strict motion threshold. If None, computed as motion_thresh * 1.5. Default is None.
         strict_motion_dilation: Kernel iterations for dilating the strict motion mask. Default is 1.
         stationary_dilation: Kernel iterations for dilating the stationary mask. Default is 1.
         mask_radius: User defined circle radius for the plate mask. Default is 375.
@@ -378,6 +386,32 @@ def count_simple(
     return_detail=False,
     calibration=None
 ):
+    """
+    Counts worm trails using a simple motion projection threshold.
+
+    Uses linear model residuals to identify motion, thresholds the motion
+    projection, dilates to connect nearby pixels, and counts the resulting
+    connected components.
+
+    Args:
+        video: 3D Numpy array of uint8 with shape (T, H, W).
+        motion_thresh: Motion residual threshold for binarisation. Default is 1.5.
+        dilation_radius: Radius of the dilation kernel applied to the motion
+            mask before counting. Default is 2.
+        mask_radius: Radius of the circular plate mask. Default is 375.
+        return_detail: If True, returns a DataFrame with per-worm trail distance
+            and area. If False, returns just the total count. Default is False.
+        calibration: Optional Calibration object for converting pixel units
+            to physical units (mm, mm²). Default is None.
+
+    Returns:
+        int or pandas.DataFrame:
+            If return_detail is False, returns the number of detected worm trails
+            (integer).
+            If return_detail is True, returns a DataFrame with columns:
+            'worm_id', 'distance', 'area' (and 'distance_mm', 'area_mm2' if
+            calibration is provided).
+    """
     residuals, _, _ = fit_pixel_linear_model(video)
     motion_proj = np.mean(residuals**2, axis=0)
     mask = create_plate_mask(np.mean(video, axis=0).astype(np.uint8), mask_radius=mask_radius)
@@ -542,6 +576,7 @@ def measure_window(binary_window, time_window, minimum_size=10, maximum_size=100
                 metrics['label_id'] = label_id
                 window_data.append(metrics)
     return window_data
+
 def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None, calibration=None):
     """
     Measures chemotaxis metrics over time windows using a 2D projection approach.
@@ -611,13 +646,14 @@ def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minim
     (below the threshold) to avoid parallelization overhead.
     
     Args:
-        binary_array: 3D Numpy array (T, H, W) of uint8 (binary/0-255).
+        binary_array: 3D Numpy array of shape (T, H, W) of uint8 (binary 0/255).
         time_window: Number of frames per window (default: 10).
         interval: Frame interval between windows (default: 60).
-        minimum_size: Minimum component size in pixels (default: 10).
-        maximum_size: Maximum component size in pixels (default: 1000).
+        minimum_size: Minimum component area in pixels (default: 10).
+        maximum_size: Maximum component area in pixels (default: 1000).
         test_spot: Tuple or array of (y, x) for bait location (default: None).
-        calibration: Optional Calibration object for converting pixel/frame units to physical units.
+        calibration: Optional Calibration object for converting pixel/frame
+            units to physical units.
         n_jobs: Number of parallel workers (-1 for all cores, default: -1).
         
     Returns:

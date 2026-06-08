@@ -1,17 +1,3 @@
-import numpy as np
-import cv2
-
-__all__ = [
-    'white_to_black',
-    'black_to_white',
-    'blue_to_red',
-    'banded_blue_to_red',
-    'dark_separated_blue_to_red',
-    'middle_grey_last_black',
-    'hsv_rainbow',
-]
-
-
 """
 Predefined colormaps for time-encoded trail visualization.
 
@@ -24,6 +10,19 @@ blue_to_red: Smooth gradient from blue to red
 banded_blue_to_red: Blue to red gradient with oscillating brightness
 dark_separated_blue_to_red: Discrete blue to red gradient with alternating frames
 """
+
+import numpy as np
+import cv2
+
+__all__ = [
+    'white_to_black',
+    'black_to_white',
+    'blue_to_red',
+    'banded_blue_to_red',
+    'dark_separated_blue_to_red',
+    'middle_grey_last_black',
+    'hsv_rainbow',
+]
 
 white_to_black = []
 for i in range(256):

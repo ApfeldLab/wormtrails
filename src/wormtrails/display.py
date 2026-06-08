@@ -17,6 +17,7 @@ def show_video_array(video_array, window_name='esc to exit'):
 
     Args:
         video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
+        window_name: Title of the display window. Default is 'esc to exit'.
 
     Returns:
         None. Displays video in an OpenCV window.
@@ -75,6 +76,7 @@ def show_frame(frame, window_name='esc to exit'):
 
     Args:
         frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing a single frame.
+        window_name: Title of the display window. Default is 'esc to exit'.
 
     Returns:
         None. Displays frame in an OpenCV window.
@@ -120,9 +122,14 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
         colormap: Numpy array of shape (N, 3) containing the colormap colors (B, G, R values 0-255), applied to each trail frame.
         window: Integer value for the window size (number of frames to look back) used to create trails. Shorter windows take less processing time.
         scale_factor: Float value for the scaling factor, applied to trails to adjust brightness. Higher values increase contrast.
-        offset: Integer value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise.
+        offset: Integer or float value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise.
         light_background: Boolean value. If True, assumes dark trails on light background. If False, assumes bright trails on dark background.
+        window_name: Title of the display window. Default is 'esc to exit'.
 
+    Returns:
+        None. Displays a time-encoded video in an OpenCV window.
+
+    Notes:
         When using symmetric (grayscale) colormaps such as white_to_black or black_to_white,
         flipping light_background is equivalent to using the opposite colormap.
         For asymmetric colormaps (e.g. blue_to_red), light_background flips the color channel
@@ -197,6 +204,9 @@ def count_assist(video_array, window_name='count assist', calibration=None):
             - x_mm, y_mm: Calibrated coordinates in mm (only if calibration provided).
             - time_s: Estimated time in seconds (only if calibration provided).
               Computed as frame / calibration.frames_per_second.
+
+    Raises:
+        ValueError: If all frames in the video are identical (no motion detected).
     """
     num_frames = video_array.shape[0]
     if num_frames == 0:
