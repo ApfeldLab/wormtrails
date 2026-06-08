@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+import pandas as pd
 from .processing import create_time_encoded_frame, fit_pixel_linear_model
 
 def show_video_array(video_array, window_name='esc to exit'):
@@ -163,22 +164,35 @@ def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), w
     cv2.waitKey(1)
     cv2.destroyAllWindows()
 
-def count_assist(video_array, window_name='count assist'):
+def count_assist(video_array, window_name='count assist', calibration=None):
     """
-    Displays a video overlaid with motion trails, allowing the user to mark worms 
+    Displays a video overlaid with motion trails, allowing the user to mark worms
     by double-clicking. Use the backspace key to undo a marker.
-    
+
+    Hold **Shift** while double-clicking (or while performing a double-click-like
+    single click) to add another marker to the **same** worm instead of starting a
+    new worm.  Consecutive markers belonging to the same worm are connected by a
+    line segment on the overlay.
+
     Args:
         video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames.
         window_name: Title of the display window (e.g., file name).
-        
+        calibration: Optional Calibration object. When provided, adds unit-converted
+            columns for positions (x_mm, y_mm) and time (time_s).
+
     Returns:
-        markers: List of (x, y) coordinate tuples for marked worms.
+        pandas.DataFrame with columns:
+            - worm_id: Sequential integer ID for each marked worm (1-based).
+            - x, y: Pixel coordinates of the marker.
+            - frame: Video frame number at which the marker was placed.
+            - x_mm, y_mm: Calibrated coordinates in mm (only if calibration provided).
+            - time_s: Estimated time in seconds (only if calibration provided).
+              Computed as frame / calibration.frames_per_second.
     """
     num_frames = video_array.shape[0]
     if num_frames == 0:
         print("Warning: Empty video array.")
-        return
+        return pd.DataFrame(columns=['worm_id', 'x', 'y', 'frame'])
 
     # Calculate the motion overlay
     residuals, _, _ = fit_pixel_linear_model(video_array)
@@ -203,6 +217,13 @@ def count_assist(video_array, window_name='count assist'):
             np.clip((video_array[t] // 2) + (time_derivative[t] // 2), 0, 255).astype(np.uint8)
         )
 
+    # Map overlay index to reported frame number.
+    # Overlay indices 0, 1, 2 all correspond to frame 0 (first raw frame,
+    # mean projection, and first frame with derivative respectively);
+    # subsequent indices count up from 0.
+    def _overlay_frame(idx):
+        return max(0, idx - 2)
+
     markers = []
 
     cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
@@ -220,21 +241,39 @@ def count_assist(video_array, window_name='count assist'):
     state['last_click_time'] = 0
     state['last_click_pos'] = None
 
+    def _next_worm_id():
+        return max((m['worm_id'] for m in markers), default=0) + 1
+
+    def _add_marker(x, y, worm_id):
+        markers.append({
+            'worm_id': worm_id,
+            'x': x,
+            'y': y,
+            'frame': _overlay_frame(state['current_idx'])
+        })
+        distinct = len({m['worm_id'] for m in markers})
+        print(f"Markers: {len(markers)}, Worms: {distinct}", end='\r')
+        state['needs_redraw'] = True
+
     def mouse_callback(event, x, y, flags, param):
         nonlocal state
         if event == cv2.EVENT_LBUTTONDOWN:
             now = cv2.getTickCount()
             dt = (now - state['last_click_time']) / cv2.getTickFrequency()
             if dt < 0.4 and state['last_click_pos'] == (x, y):
-                markers.append((x, y))
-                print(f"Total marked worms: {len(markers)}", end='\r')
-                state['needs_redraw'] = True
+                if (flags & cv2.EVENT_FLAG_SHIFTKEY) and markers:
+                    worm_id = markers[-1]['worm_id']
+                else:
+                    worm_id = _next_worm_id()
+                _add_marker(x, y, worm_id)
             state['last_click_time'] = now
             state['last_click_pos'] = (x, y)
         elif event == cv2.EVENT_LBUTTONDBLCLK:
-            markers.append((x, y))
-            print(f"Total marked worms: {len(markers)}", end='\r')
-            state['needs_redraw'] = True
+            if (flags & cv2.EVENT_FLAG_SHIFTKEY) and markers:
+                worm_id = markers[-1]['worm_id']
+            else:
+                worm_id = _next_worm_id()
+            _add_marker(x, y, worm_id)
 
     cv2.setMouseCallback(window_name, mouse_callback)
 
@@ -254,9 +293,25 @@ def count_assist(video_array, window_name='count assist'):
                 color_frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
             else:
                 color_frame = frame.copy()
-                
-            for (mx, my) in markers:
-                cv2.circle(color_frame, (mx, my), 3, (0, 0, 255), -1)
+
+            # Group markers by worm_id (preserving marker order within each worm)
+            worm_groups = {}
+            for m in markers:
+                wid = m['worm_id']
+                worm_groups.setdefault(wid, []).append((m['x'], m['y']))
+
+            # Draw connecting lines for each worm with 2+ markers
+            for pts in worm_groups.values():
+                if len(pts) >= 2:
+                    for i in range(len(pts) - 1):
+                        cv2.line(color_frame, pts[i], pts[i + 1], (0, 0, 255), 1)
+
+            # Draw marker circles and worm ID labels
+            for m in markers:
+                cv2.circle(color_frame, (m['x'], m['y']), 3, (0, 0, 255), -1)
+                cv2.putText(color_frame, str(m['worm_id']),
+                            (m['x'] + 4, m['y'] - 4),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
 
             cv2.imshow(window_name, color_frame)
             state['needs_redraw'] = False
@@ -271,7 +326,8 @@ def count_assist(video_array, window_name='count assist'):
         if key in (8, 127):
             if markers:
                 markers.pop()
-                print(f"Total marked worms: {len(markers)}", end='\r')
+                distinct = len({m['worm_id'] for m in markers}) if markers else 0
+                print(f"Markers: {len(markers)}, Worms: {distinct}", end='\r')
                 state['needs_redraw'] = True
 
         # Secondary exit: Window 'X' button
@@ -284,4 +340,14 @@ def count_assist(video_array, window_name='count assist'):
 
     cv2.waitKey(1)
     cv2.destroyAllWindows()
-    return markers
+
+    df = pd.DataFrame(markers)
+    if df.empty:
+        df = pd.DataFrame(columns=['worm_id', 'x', 'y', 'frame'])
+
+    if calibration is not None and not df.empty:
+        df['x_mm'] = calibration.distance_mm(df['x'].values)
+        df['y_mm'] = calibration.distance_mm(df['y'].values)
+        df['time_s'] = df['frame'].values / calibration.frames_per_second
+
+    return df

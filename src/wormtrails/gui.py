@@ -383,11 +383,22 @@ class WormtrailsGUI(tk.Tk):
         # Progress
         self.count_progress = ProgressLabel(self.tab_count)
 
+        # Calibration (collapsible)
+        cal_frame = CollapsibleFrame(self.tab_count, "Calibration (for physical units)")
+        self._count_px_per_mm = tk.StringVar(value="")
+        self._count_fps = tk.StringVar(value="")
+        cal_frame.add_label_entry("Pixels per mm:", self._count_px_per_mm, row=0)
+        cal_frame.add_label_entry("Frames per second:", self._count_fps, row=1)
+        cal_frame.pack(fill='x', padx=6, pady=2)
+
         # Result and button
         result_frame = tk.Frame(self.tab_count)
         result_frame.pack(pady=8)
         self.count_result = tk.StringVar(value="")
         ttk.Label(result_frame, textvariable=self.count_result, font=('Arial', 13, 'bold'), foreground="blue").pack()
+        self._count_save_btn = ttk.Button(result_frame, text="Save Markers CSV",
+                                          command=self._save_count_markers, state='disabled')
+        self._count_save_btn.pack(pady=2)
         ttk.Button(result_frame, text="Count Worms",
                    command=lambda: self.measure_action_wrapper(self._do_count, "Counting worms...")).pack(pady=4)
         ttk.Button(result_frame, text="Count Assist (Manual)",
@@ -420,15 +431,37 @@ class WormtrailsGUI(tk.Tk):
         if self._count_vis.get():
             self.after(0, lambda: wts.show_video_array(vis))
 
+    def _get_calibration(self, px_per_mm_var, fps_var):
+        px = _safe_float(px_per_mm_var.get(), None)
+        fps = _safe_float(fps_var.get(), None)
+        if px is not None and fps is not None:
+            return wts.Calibration(pixels_per_mm=px, frames_per_second=fps)
+        return None
+
     def _do_count_assist(self):
         video = wts.read_video_file(self.video_path.get())
         import os
         filename = os.path.basename(self.video_path.get())
+        cal = self._get_calibration(self._count_px_per_mm, self._count_fps)
         def run():
-            markers = wts.count_assist(video, window_name=filename)
-            if markers is not None:
-                self.count_result.set(f"Manual Count: {len(markers)}")
+            df = wts.count_assist(video, window_name=filename, calibration=cal)
+            self._last_count_assist_df = df
+            n = len(df)
+            self.count_result.set(f"Manual Count: {n}")
+            self._count_save_btn.config(state='normal' if n > 0 else 'disabled')
         self.after(0, run)
+
+    def _save_count_markers(self):
+        if not hasattr(self, '_last_count_assist_df') or self._last_count_assist_df.empty:
+            return
+        save_path = filedialog.asksaveasfilename(
+            defaultextension=".csv",
+            filetypes=[("CSV Files", "*.csv")],
+            title="Save Marker Coordinates"
+        )
+        if save_path:
+            self._last_count_assist_df.to_csv(save_path, index=False)
+            messagebox.showinfo("Success", f"Saved to {save_path}")
 
     # --- Chemotaxis Tab Setup ---
     def setup_chemotaxis_tab(self):
@@ -487,6 +520,14 @@ class WormtrailsGUI(tk.Tk):
         self.chemo_bait_y = tk.StringVar(value="")
         ttk.Entry(bait_frame, textvariable=self.chemo_bait_y, width=10).grid(row=0, column=3, padx=4, pady=4, sticky='w')
 
+        # Calibration (collapsible)
+        chemo_cal = CollapsibleFrame(self.tab_chemotaxis, "Calibration (for physical units)")
+        self._chemo_px_per_mm = tk.StringVar(value="")
+        self._chemo_fps = tk.StringVar(value="")
+        chemo_cal.add_label_entry("Pixels per mm:", self._chemo_px_per_mm, row=0)
+        chemo_cal.add_label_entry("Frames per second:", self._chemo_fps, row=1)
+        chemo_cal.pack(fill='x', padx=6, pady=2)
+
         # Progress
         self.chemo_progress = ProgressLabel(self.tab_chemotaxis)
 
@@ -529,6 +570,7 @@ class WormtrailsGUI(tk.Tk):
         if bx.isdigit() and by.isdigit():
             test_spot = (int(by), int(bx))
 
+        cal = self._get_calibration(self._chemo_px_per_mm, self._chemo_fps)
         df = wts.measure_chemotaxis(
             motion,
             time_window=self.chemo_window.get(),
@@ -536,6 +578,7 @@ class WormtrailsGUI(tk.Tk):
             minimum_size=self.chemo_min.get(),
             maximum_size=self.chemo_max.get(),
             test_spot=test_spot,
+            calibration=cal,
         )
 
         def request_save():
