@@ -1,3 +1,6 @@
+import os
+os.environ.setdefault('TK_SILENCE_DEPRECATION', '1')
+
 import tkinter as tk
 from tkinter import filedialog, ttk, messagebox
 import cv2
