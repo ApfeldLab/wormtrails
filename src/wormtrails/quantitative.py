@@ -1,8 +1,42 @@
 import cv2
 import numpy as np
 import pandas as pd
+from dataclasses import dataclass
 from joblib import Parallel, delayed
 from wormtrails.processing import fit_pixel_linear_model
+
+
+@dataclass
+class Calibration:
+    """Calibration for converting pixel/frame units to physical units.
+
+    Attributes:
+        pixels_per_mm: Conversion factor — number of pixels per millimeter
+            (or per chosen distance unit). Default is 1.0 (no conversion).
+        frames_per_second: Frame rate of the recording — number of frames
+            per second of real time. Default is 1.0 (no conversion).
+
+    Examples:
+        # A typical plate scan with 375 px plate radius and 35 mm plate radius:
+        >>> cal = Calibration(pixels_per_mm=375 / 17.5, frames_per_second=1)
+
+        # A 30 fps video:
+        >>> cal = Calibration(frames_per_second=30)
+    """
+    pixels_per_mm: float = 1.0
+    frames_per_second: float = 1.0
+
+    def distance_mm(self, pixels: float) -> float:
+        """Convert a distance from pixels to millimetres."""
+        return pixels / self.pixels_per_mm
+
+    def speed_mm_s(self, pixels_per_frame: float) -> float:
+        """Convert a speed from pixels/frame to mm/s."""
+        return pixels_per_frame * self.frames_per_second / self.pixels_per_mm
+
+    def area_mm2(self, pixels_area: float) -> float:
+        """Convert an area from square pixels to square millimetres."""
+        return pixels_area / (self.pixels_per_mm ** 2)
 
 def _find_concentric_center(image, mask_radius):
     """
@@ -329,7 +363,8 @@ def count_simple(
     motion_thresh=1.5,
     dilation_radius=2,
     mask_radius=375,
-    return_detail=False
+    return_detail=False,
+    calibration=None
 ):
     residuals, _, _ = fit_pixel_linear_model(video)
     motion_proj = np.mean(residuals**2, axis=0)
@@ -350,11 +385,15 @@ def count_simple(
             pts = pts[:, ::-1].astype(np.float32)
             _, radius = cv2.minEnclosingCircle(pts)
             
-            data.append({
+            entry = {
                 'worm_id': i + 1,
                 'distance': 2 * (radius - dilation_radius),
                 'area': area
-                })
+            }
+            if calibration is not None:
+                entry['distance_mm'] = calibration.distance_mm(entry['distance'])
+                entry['area_mm2'] = calibration.area_mm2(area)
+            data.append(entry)
         df = pd.DataFrame(data)
         return df
     else:
@@ -388,7 +427,7 @@ def calculate_relative_metrics(position, direction, test_spot):
     
     return r, theta, rel_angle
 
-def measure_component(binary_window, component_mask, centroid_yx, time_window):
+def measure_component(binary_window, component_mask, centroid_yx, time_window, calibration=None):
     """
     Measures movement metrics (position, direction, speed) for a single component in a time window.
     
@@ -397,10 +436,13 @@ def measure_component(binary_window, component_mask, centroid_yx, time_window):
         component_mask: 2D mask (0 and 255) for the component in the projection.
         centroid_yx: Numpy array of shape (2,) containing (y, x) centroid from the projection.
         time_window: Number of frames in the window used for speed calculation.
+        calibration: Optional Calibration object for converting to physical units.
         
     Returns:
         Dictionary with movement metrics for the component, or None if insufficient points to calculate metrics.
-        Dictionary keys: 'y', 'x', 'direction_y', 'direction_x', 'speed'
+        Dictionary keys: 'y', 'x', 'direction_y', 'direction_x', 'speed' (px/frame).
+        If calibration is provided, additional keys 'speed_mm_s', 'trail_radius_mm',
+        'worm_radius_mm' are included.
         
     Notes:
         - Direction is determined by fitting a line to the 2D footprint (main axis)
@@ -439,7 +481,7 @@ def measure_component(binary_window, component_mask, centroid_yx, time_window):
 
     speed = 2 * (trail_radius - worm_radius) / time_window
 
-    return {
+    metrics = {
         'y': position[0],
         'x': position[1],
         'direction_y': direction[0],
@@ -447,7 +489,14 @@ def measure_component(binary_window, component_mask, centroid_yx, time_window):
         'speed': speed
     }
 
-def measure_window(binary_window, time_window, minimum_size=10, maximum_size=1000):
+    if calibration is not None:
+        metrics['speed_mm_s'] = calibration.speed_mm_s(speed)
+        metrics['trail_radius_mm'] = calibration.distance_mm(trail_radius)
+        metrics['worm_radius_mm'] = calibration.distance_mm(worm_radius)
+
+    return metrics
+
+def measure_window(binary_window, time_window, minimum_size=10, maximum_size=1000, calibration=None):
     """
     Labels connected components in a binary time window and measures movement for each.
     
@@ -456,10 +505,12 @@ def measure_window(binary_window, time_window, minimum_size=10, maximum_size=100
         time_window: Number of frames in the window used for analysis.
         minimum_size: Minimum pixel area in 2D projection for a component to be considered. Default is 10.
         maximum_size: Maximum pixel area in 2D projection for a component to be considered. Default is 1000.
+        calibration: Optional Calibration object for converting to physical units.
         
     Returns:
         List of dictionaries containing movement metrics for each detected component.
-        Each dictionary contains: 'y', 'x', 'direction_y', 'direction_x', 'speed', 'label_id', 'time'
+        Each dictionary contains: 'y', 'x', 'direction_y', 'direction_x', 'speed', 'label_id', 'time'.
+        If calibration is provided, additional keys with physical units are included.
         
     Notes:
         - Components are identified using connected components analysis on max projection
@@ -474,13 +525,12 @@ def measure_window(binary_window, time_window, minimum_size=10, maximum_size=100
         if minimum_size < stats[label_id, cv2.CC_STAT_AREA] < maximum_size:
             comp_mask = (labels == label_id)
             centroid_yx = centroids[label_id][::-1]
-            metrics = measure_component(binary_window, comp_mask, centroid_yx, time_window)
+            metrics = measure_component(binary_window, comp_mask, centroid_yx, time_window, calibration=calibration)
             if metrics:
                 metrics['label_id'] = label_id
                 window_data.append(metrics)
     return window_data
-
-def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None):
+def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None, calibration=None):
     """
     Measures chemotaxis metrics over time windows using a 2D projection approach.
     Analyzes binary video data to compute position, direction, speed, and relative angle to a test spot.
@@ -492,16 +542,21 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
         minimum_size: Minimum area in pixels (2D projection) to consider a component as a valid worm trail. Default is 10.
         maximum_size: Maximum area in pixels (2D projection) to consider a component as a valid worm trail. Default is 1000.
         test_spot: Tuple or array of (y, x) absolute coordinates for the test spot or bait location. If None (default), relative angle metrics are not computed.
+        calibration: Optional Calibration object for converting pixel/frame units to physical units.
+            When provided, additional columns with physical units are added to the output DataFrame.
         
     Returns:
         A pandas DataFrame with one row per detected worm trail, containing columns:
-            - 'y', 'x': Position of the component
+            - 'y', 'x': Position of the component (pixels)
             - 'direction_y', 'direction_x': Direction vector components
-            - 'speed': Calculated speed in the window
+            - 'speed': Calculated speed (px/frame)
             - 'time': Starting frame index of the time window
-            - 'r': Radial distance to test spot (if test_spot provided)
+            - 'r': Radial distance to test spot (pixels, if test_spot provided)
             - 'theta': Absolute angle in radians
             - 'relative_angle': Relative angle to test spot in radians
+            - 'speed_mm_s': Speed in mm/s (if calibration provided)
+            - 'r_mm': Radial distance in mm (if calibration and test_spot provided)
+            - 'trail_radius_mm', 'worm_radius_mm': Trail/worm radii in mm (if calibration provided)
             
         Prints progress indicator during processing.
 
@@ -515,7 +570,7 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
     for t in range(0, binary_array.shape[0] - time_window + 1, interval):
         print(f'{t}/{binary_array.shape[0]}', end="\r")
         
-        window_metrics = measure_window(binary_array[t:t+time_window], time_window, minimum_size, maximum_size)
+        window_metrics = measure_window(binary_array[t:t+time_window], time_window, minimum_size, maximum_size, calibration=calibration)
         
         for m in window_metrics:
             m['time'] = t
@@ -528,12 +583,15 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
                 m['r'] = r
                 m['theta'] = theta
                 m['relative_angle'] = rel_angle
+                if calibration is not None:
+                    m['r_mm'] = calibration.distance_mm(r)
             
             worm_data.append(m)
 
     return pd.DataFrame(worm_data)
 
-def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None, n_jobs=-1):
+
+def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None, calibration=None, n_jobs=-1):
     """Parallel version of measure_chemotaxis using joblib.
     
     Each time window is processed independently, making this ideal for parallelization.
@@ -547,20 +605,22 @@ def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minim
         minimum_size: Minimum component size in pixels (default: 10).
         maximum_size: Maximum component size in pixels (default: 1000).
         test_spot: Tuple or array of (y, x) for bait location (default: None).
+        calibration: Optional Calibration object for converting pixel/frame units to physical units.
         n_jobs: Number of parallel workers (-1 for all cores, default: -1).
         
     Returns:
         pandas DataFrame with chemotaxis metrics for each detected worm trail.
+        If calibration is provided, additional columns with physical units are included.
     """
     n_windows = (binary_array.shape[0] - time_window + 1) // interval
     
     if n_windows <= 15:
-        return measure_chemotaxis(binary_array, time_window, interval, minimum_size, maximum_size, test_spot)
+        return measure_chemotaxis(binary_array, time_window, interval, minimum_size, maximum_size, test_spot, calibration)
     
     window_starts = list(range(0, binary_array.shape[0] - time_window + 1, interval))
     
     def _process_window(t):
-        window_data = measure_window(binary_array[t:t+time_window], time_window, minimum_size, maximum_size)
+        window_data = measure_window(binary_array[t:t+time_window], time_window, minimum_size, maximum_size, calibration=calibration)
         for m in window_data:
             m['time'] = t
             if test_spot is not None:
@@ -570,6 +630,8 @@ def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minim
                 m['r'] = r
                 m['theta'] = theta
                 m['relative_angle'] = rel_angle
+                if calibration is not None:
+                    m['r_mm'] = calibration.distance_mm(r)
         return window_data
     
     results = Parallel(n_jobs=n_jobs, prefer='processes', backend='loky')(

@@ -25,6 +25,7 @@ from wormtrails.processing import (
 )
 
 from wormtrails.quantitative import (
+    Calibration,
     count_video,
     count_simple,
     create_plate_mask,
