@@ -217,8 +217,21 @@ def count_assist(video_array, window_name='count assist'):
 
     state = {'current_idx': 1, 'needs_redraw': True}
 
+    state['last_click_time'] = 0
+    state['last_click_pos'] = None
+
     def mouse_callback(event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDBLCLK:
+        nonlocal state
+        if event == cv2.EVENT_LBUTTONDOWN:
+            now = cv2.getTickCount()
+            dt = (now - state['last_click_time']) / cv2.getTickFrequency()
+            if dt < 0.4 and state['last_click_pos'] == (x, y):
+                markers.append((x, y))
+                print(f"Total marked worms: {len(markers)}", end='\r')
+                state['needs_redraw'] = True
+            state['last_click_time'] = now
+            state['last_click_pos'] = (x, y)
+        elif event == cv2.EVENT_LBUTTONDBLCLK:
             markers.append((x, y))
             print(f"Total marked worms: {len(markers)}", end='\r')
             state['needs_redraw'] = True
