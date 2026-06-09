@@ -1,6 +1,15 @@
-import cv2
+import sys
 import numpy as np
 import pandas as pd
+from PySide6.QtWidgets import (
+    QApplication, QDialog, QVBoxLayout, QHBoxLayout, QLabel,
+    QSlider, QPushButton, QWidget, QGridLayout, QSizePolicy
+)
+from PySide6.QtCore import Qt, QTimer, QPoint, QEvent
+from PySide6.QtGui import (
+    QImage, QPixmap, QPainter, QPen, QColor, QFont, QKeyEvent,
+    QMouseEvent, QWheelEvent, QCursor
+)
 from .processing import create_time_encoded_frame, fit_pixel_linear_model
 
 __all__ = [
@@ -10,212 +19,552 @@ __all__ = [
     'count_assist',
 ]
 
-def show_video_array(video_array, window_name='esc to exit'):
+
+def _ensure_qapp():
+    app = QApplication.instance()
+    if app is None:
+        app = QApplication(sys.argv)
+    return app
+
+
+def _numpy_to_qpixmap(arr):
+    if arr.dtype in (np.float32, np.float64):
+        arr = np.clip(arr, 0, 255).astype(np.uint8)
+    elif arr.dtype != np.uint8:
+        arr = arr.astype(np.uint8)
+
+    if arr.ndim == 2:
+        h, w = arr.shape
+        buf = arr.tobytes()
+        img = QImage(buf, w, h, w, QImage.Format_Grayscale8)
+    elif arr.ndim == 3 and arr.shape[2] == 3:
+        h, w = arr.shape[:2]
+        rgb = np.ascontiguousarray(arr[:, :, ::-1])
+        buf = rgb.tobytes()
+        img = QImage(buf, w, h, 3 * w, QImage.Format_RGB888)
+    else:
+        raise ValueError(f"Unsupported array shape: {arr.shape}")
+
+    return QPixmap.fromImage(img.copy())
+
+
+def _render_zoomed(orig_pm, label_size, zoom, pan_dx, pan_dy):
+    """Paint *orig_pm* into a *label_size*-sized pixmap with zoom and pan.
+
+    Returns (result_pixmap, draw_x, draw_y, display_w, display_h)
+    where (draw_x, draw_y) is the top-left corner of the image content
+    within the result, and (display_w, display_h) is its rendered size.
     """
-    Displays a video array in a window with a trackbar to scroll through frames.
-    Close the window to exit.
+    if zoom <= 0:
+        zoom = 1.0
 
-    Args:
-        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames, with time as axis 0.
-        window_name: Title of the display window. Default is 'esc to exit'.
+    fit = orig_pm.size().scaled(label_size, Qt.KeepAspectRatio)
+    dw = max(1, int(fit.width() * zoom))
+    dh = max(1, int(fit.height() * zoom))
+    scaled = orig_pm.scaled(dw, dh, Qt.KeepAspectRatio, Qt.FastTransformation)
+    dw = scaled.width()
+    dh = scaled.height()
 
-    Returns:
-        None. Displays video in an OpenCV window.
+    max_dx = max(0, (dw - label_size.width()) // 2)
+    max_dy = max(0, (dh - label_size.height()) // 2)
+    pan_dx = max(-max_dx, min(max_dx, pan_dx))
+    pan_dy = max(-max_dy, min(max_dy, pan_dy))
 
-    Notes:
-        - Uses OpenCV's imshow and createTrackbar for frame navigation
-        - Close the window to exit
+    draw_x = (label_size.width() - dw) // 2 + pan_dx
+    draw_y = (label_size.height() - dh) // 2 + pan_dy
+
+    result = QPixmap(label_size)
+    result.fill(Qt.black)
+    p = QPainter(result)
+    p.drawPixmap(draw_x, draw_y, scaled)
+    p.end()
+
+    return result, draw_x, draw_y, dw, dh
+
+
+class _ZoomableLabel(QLabel):
+    """A QLabel that forwards wheel events to a callback."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._wheel_callback = None
+
+    def set_wheel_callback(self, callback):
+        self._wheel_callback = callback
+
+    def wheelEvent(self, event):
+        if self._wheel_callback is not None:
+            self._wheel_callback(event)
+            event.accept()
+        else:
+            super().wheelEvent(event)
+
+
+class _ZoomPanMixin:
+    """Adds scroll-to-zoom and drag-to-pan to an image_label-based dialog.
+
+    The ``image_label`` must be a :class:`_ZoomableLabel` with its wheel
+    callback connected via :meth:`_connect_wheel`.
     """
-    
+
+    def _init_zoom_pan(self):
+        self._zoom = 1.0
+        self._pan_dx = 0
+        self._pan_dy = 0
+        self._dragging = False
+        self._drag_start = QPoint()
+        self._drag_pan_start = (0, 0)
+
+    def _connect_wheel(self):
+        self.image_label.set_wheel_callback(self._handle_wheel)
+
+    def _paint_base(self, orig_pm, label_size):
+        """Apply zoom/pan and return (pixmap, draw_x, draw_y, dw, dh)."""
+        pm, dx, dy, dw, dh = _render_zoomed(
+            orig_pm, label_size, self._zoom, self._pan_dx, self._pan_dy)
+        self._tr = (dx, dy, dw, dh, orig_pm.width(), orig_pm.height())
+        return pm, dx, dy, dw, dh
+
+    def _label_to_image(self, lx, ly):
+        dx, dy, dw, dh, ow, oh = self._tr
+        return (lx - dx) * ow / dw, (ly - dy) * oh / dh
+
+    def _image_to_label(self, ix, iy):
+        dx, dy, dw, dh, ow, oh = self._tr
+        return dx + ix * dw / ow, dy + iy * dh / oh
+
+    def _cap_pan(self):
+        if self._original_pixmap is None:
+            return
+        label_size = self.image_label.size()
+        fit = self._original_pixmap.size().scaled(label_size, Qt.KeepAspectRatio)
+        dw = max(1, int(fit.width() * self._zoom))
+        dh = max(1, int(fit.height() * self._zoom))
+        max_dx = max(0, (dw - label_size.width()) // 2)
+        max_dy = max(0, (dh - label_size.height()) // 2)
+        self._pan_dx = max(-max_dx, min(max_dx, self._pan_dx))
+        self._pan_dy = max(-max_dy, min(max_dy, self._pan_dy))
+
+    def _handle_wheel(self, event):
+        if self._original_pixmap is None:
+            return
+
+        old_zoom = self._zoom
+        factor = 1.1 if event.angleDelta().y() > 0 else 1 / 1.1
+        self._zoom = max(0.1, min(10.0, self._zoom * factor))
+
+        ls = self.image_label.size()
+        fit = self._original_pixmap.size().scaled(ls, Qt.KeepAspectRatio)
+        old_dw = max(1, int(fit.width() * old_zoom))
+        old_dh = max(1, int(fit.height() * old_zoom))
+        new_dw = max(1, int(fit.width() * self._zoom))
+        new_dh = max(1, int(fit.height() * self._zoom))
+
+        cx, cy = event.position().x(), event.position().y()
+        old_dx = (ls.width() - old_dw) // 2 + self._pan_dx
+        old_dy = (ls.height() - old_dh) // 2 + self._pan_dy
+        img_x = (cx - old_dx) * self._original_pixmap.width() / old_dw
+        img_y = (cy - old_dy) * self._original_pixmap.height() / old_dh
+
+        new_dx = cx - img_x * new_dw / self._original_pixmap.width()
+        new_dy = cy - img_y * new_dh / self._original_pixmap.height()
+
+        self._pan_dx = new_dx - (ls.width() - new_dw) // 2
+        self._pan_dy = new_dy - (ls.height() - new_dh) // 2
+        self._cap_pan()
+        self._refresh_display()
+
+    def _try_start_drag(self, event):
+        if (event.button() == Qt.LeftButton and self._zoom > 1.0
+                and self._original_pixmap is not None):
+            self._dragging = True
+            self._drag_start = event.position().toPoint()
+            self._drag_pan_start = (self._pan_dx, self._pan_dy)
+            self.setCursor(QCursor(Qt.ClosedHandCursor))
+            return True
+        return False
+
+    def _try_drag_move(self, event):
+        if self._dragging:
+            delta = event.position().toPoint() - self._drag_start
+            self._pan_dx = self._drag_pan_start[0] + delta.x()
+            self._pan_dy = self._drag_pan_start[1] + delta.y()
+            self._cap_pan()
+            self._refresh_display()
+            return True
+        return False
+
+    def _try_end_drag(self, event):
+        if event.button() == Qt.LeftButton and self._dragging:
+            self._dragging = False
+            self.setCursor(QCursor(Qt.ArrowCursor))
+            return True
+        return False
+
+
+class _VideoPlayerDialog(QDialog, _ZoomPanMixin):
+    def __init__(self, video_array, window_title="Video", show_slider=True,
+                 frame_callback=None, parent=None):
+        super().__init__(parent)
+        self.video_array = video_array
+        self.num_frames = video_array.shape[0]
+        self.current_idx = 0
+        self.playing = False
+        self.frame_callback = frame_callback
+
+        self.setWindowTitle(window_title)
+        self.setMinimumSize(400, 300)
+        self.resize(800, 600)
+
+        layout = QVBoxLayout(self)
+        self.image_label = _ZoomableLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("background-color: black;")
+        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self.image_label, 1)
+
+        if show_slider:
+            slider_layout = QHBoxLayout()
+            self.slider = QSlider(Qt.Horizontal)
+            self.slider.setMinimum(0)
+            self.slider.setMaximum(self.num_frames - 1)
+            self.slider.valueChanged.connect(self._on_slider)
+            slider_layout.addWidget(self.slider)
+
+            self.play_btn = QPushButton("Play")
+            self.play_btn.clicked.connect(self._toggle_play)
+            slider_layout.addWidget(self.play_btn)
+
+            self.frame_label = QLabel(f"0 / {self.num_frames - 1}")
+            slider_layout.addWidget(self.frame_label)
+            layout.addLayout(slider_layout)
+
+        self.timer = QTimer(self)
+        self.timer.setInterval(30)
+        self.timer.timeout.connect(self._advance_frame)
+
+        self._init_zoom_pan()
+        self._connect_wheel()
+        self._original_pixmap = None
+        self._tr = (0, 0, 1, 1, 1, 1)
+        self._show_frame(0)
+
+    def _refresh_display(self):
+        if self._original_pixmap is None:
+            return
+        pm, _, _, _, _ = self._paint_base(self._original_pixmap, self.image_label.size())
+        self.image_label.setPixmap(pm)
+
+    def _show_frame(self, idx):
+        if idx < 0 or idx >= self.num_frames:
+            return
+        self.current_idx = idx
+        frame_data = self.video_array[idx]
+
+        if self.frame_callback:
+            frame_data = self.frame_callback(idx, frame_data)
+
+        if frame_data.ndim == 2:
+            frame_data = np.clip(frame_data, 0, 255).astype(np.uint8)
+
+        self._original_pixmap = _numpy_to_qpixmap(frame_data)
+        self._cap_pan()
+        self._refresh_display()
+
+    def _on_slider(self, value):
+        self._show_frame(value)
+        if self.frame_label:
+            self.frame_label.setText(f"{value} / {self.num_frames - 1}")
+
+    def _toggle_play(self):
+        self.playing = not self.playing
+        self.play_btn.setText("Pause" if self.playing else "Play")
+        if self.playing:
+            self.timer.start()
+        else:
+            self.timer.stop()
+
+    def _advance_frame(self):
+        nxt = self.current_idx + 1
+        if nxt >= self.num_frames:
+            self.playing = False
+            self.play_btn.setText("Play")
+            self.timer.stop()
+            return
+        self.slider.setValue(nxt)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._cap_pan()
+        self._refresh_display()
+
+    def mousePressEvent(self, event):
+        if not self._try_start_drag(event):
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not self._try_drag_move(event):
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if not self._try_end_drag(event):
+            super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() in (Qt.Key_Escape, Qt.Key_Q):
+            self.close()
+        elif event.key() == Qt.Key_Space:
+            if hasattr(self, 'play_btn'):
+                self._toggle_play()
+        elif event.key() == Qt.Key_Left and hasattr(self, 'slider'):
+            self.slider.setValue(max(0, self.current_idx - 1))
+        elif event.key() == Qt.Key_Right and hasattr(self, 'slider'):
+            self.slider.setValue(min(self.num_frames - 1, self.current_idx + 1))
+        else:
+            super().keyPressEvent(event)
+
+    def closeEvent(self, event):
+        self.timer.stop()
+        super().closeEvent(event)
+
+
+def show_video_array(video_array, window_name="esc to exit"):
     num_frames = video_array.shape[0]
     if num_frames == 0:
         print("Warning: Empty video array.")
         return
 
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 0, num_frames - 1, lambda x: None)
+    _ensure_qapp()
+    dialog = _VideoPlayerDialog(video_array, window_title=window_name)
+    dialog.exec()
 
-    # stop and reinitialize because otherwise there are errors if closing via GUI on first run
-    cv2.waitKey(1)
-    cv2.destroyAllWindows()
-    cv2.waitKey(1)
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 0, num_frames - 1, lambda x: None)
-    
-    while True:
-        current_idx = cv2.getTrackbarPos('Frame', window_name)
-        frame = video_array[current_idx]
 
-        if frame.dtype in (np.float32, np.float64):
-            frame = np.clip(frame, 0, 255).astype(np.uint8)
+def show_frame(frame, window_name="esc to exit"):
+    _ensure_qapp()
+    if frame.ndim == 2:
+        h, w = frame.shape
+        expected = 1
+    elif frame.ndim == 3:
+        h, w = frame.shape[:2]
+        expected = frame.shape[2]
+    else:
+        raise ValueError(f"Unsupported frame shape: {frame.shape}")
 
-        cv2.imshow(window_name, frame)
-        
-        # 1. Primary exit: ESC or 'q' (most reliable across all environments)
-        key = cv2.waitKey(1) & 0xFF
-        if key in (27, ord('q')):
-            break
+    video = frame.reshape(1, h, w) if expected == 1 else frame.reshape(1, h, w, expected)
+    dialog = _VideoPlayerDialog(video, window_title=window_name,
+                                show_slider=False)
+    dialog.exec()
 
-        # 2. Secondary exit: Window 'X' button (with explicit cleanup)
-        try:
-            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
-                break
-        except cv2.error:
-            # Explicitly destroy to prevent QT backend from keeping it alive
-            cv2.destroyWindow(window_name)
-            break
 
-    # Flush remaining events and clean up
-    cv2.waitKey(1)
-    cv2.destroyAllWindows()
-
-def show_frame(frame, window_name='esc to exit'):
-    """
-    Displays a single frame in a window.
-    Close the window to exit.
-
-    Args:
-        frame: 2D Numpy array of 8 bit unsigned integers (uint8) containing a single frame.
-        window_name: Title of the display window. Default is 'esc to exit'.
-
-    Returns:
-        None. Displays frame in an OpenCV window.
-
-    Notes:
-        - Uses OpenCV's imshow for single frame display
-        - Close the window to exit
-    """
-    
-    # stop and reinitialize because otherwise there are errors if closing via GUI on first run
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.waitKey(1)
-    cv2.destroyAllWindows()
-    cv2.waitKey(1)
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.waitKey(1)
-    cv2.imshow(window_name, frame)
-    
-    while True:
-        try:
-            visible = cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE)
-            if visible <= 0:
-                break
-        except cv2.error:
-            break
-        key = cv2.waitKey(1) & 0xFF
-        if key == 27:  # ESC key to exit
-            break
-
-    cv2.destroyWindow(window_name)
-
-def show_time_encoding(average_subtracted_array, colormap=np.array([[0,0,0]]), window=1, scale_factor=1, offset=0, light_background=True, window_name='esc to exit'):
-    """
-    Displays a time-encoded video array in a window with a trackbar to scroll through frames.
-    Close the window to exit.
-    Projects along the time axis of the average subtracted array within a local frame window of the specified size to create frames with trails.
-    Shorter windows make intuitive speed by trail length easier to see and work better for scans of densely populated plates.
-    Longer windows are better for seeing behavioral movement patterns, as long as the plate isn't too densely populated.
-    This implementation supports colormaps to encode time within frames.
-    
-    Args:
-        average_subtracted_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the average subtracted video frames, with time as axis 0.
-        colormap: Numpy array of shape (N, 3) containing the colormap colors (B, G, R values 0-255), applied to each trail frame.
-        window: Integer value for the window size (number of frames to look back) used to create trails. Shorter windows take less processing time.
-        scale_factor: Float value for the scaling factor, applied to trails to adjust brightness. Higher values increase contrast.
-        offset: Integer or float value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise.
-        light_background: Boolean value. If True, assumes dark trails on light background. If False, assumes bright trails on dark background.
-        window_name: Title of the display window. Default is 'esc to exit'.
-
-    Returns:
-        None. Displays a time-encoded video in an OpenCV window.
-
-    Notes:
-        When using symmetric (grayscale) colormaps such as white_to_black or black_to_white,
-        flipping light_background is equivalent to using the opposite colormap.
-        For asymmetric colormaps (e.g. blue_to_red), light_background flips the color channel
-        values, producing visually distinct (complementary) output rather than identical results.
-        To reverse temporal ordering regardless of colormap, swap it for its inverse
-        (e.g. blue_to_red for red_to_blue, white_to_black for black_to_white).
-    """
-    
+def show_time_encoding(average_subtracted_array,
+                       colormap=np.array([[0, 0, 0]]),
+                       window=1, scale_factor=1, offset=0,
+                       light_background=True, window_name="esc to exit"):
     num_frames = average_subtracted_array.shape[0]
     if num_frames == 0:
         print("Warning: Empty video array.")
         return
 
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 0, num_frames - window, lambda x: None)
+    _ensure_qapp()
 
-    # stop and reinitialize because otherwise there are errors if closing via GUI on first run
-    cv2.waitKey(1)
-    cv2.destroyAllWindows()
-    cv2.waitKey(1)
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 0, num_frames - window, lambda x: None)
-    
-    while True:
-        current_idx = cv2.getTrackbarPos('Frame', window_name)
-        frame = create_time_encoded_frame(average_subtracted_array, colormap=colormap, window=window, start_time=current_idx, scale_factor=scale_factor, offset=offset, light_background=light_background)
+    def te_callback(idx, frame_data):
+        return create_time_encoded_frame(
+            average_subtracted_array, colormap=colormap, window=window,
+            start_time=idx, scale_factor=scale_factor, offset=offset,
+            light_background=light_background
+        )
 
+    max_slider = max(0, num_frames - window)
+    dialog = _VideoPlayerDialog(average_subtracted_array,
+                                window_title=window_name,
+                                frame_callback=te_callback)
+    dialog.slider.setMaximum(max_slider)
+    dialog.frame_label.setText(f"0 / {max_slider}")
+    dialog.exec()
+
+
+class _CountAssistDialog(QDialog, _ZoomPanMixin):
+    def __init__(self, overlay_video, window_title, calibration, parent=None):
+        super().__init__(parent)
+        self.overlay_video = overlay_video
+        self.num_frames = len(overlay_video)
+        self.calibration = calibration
+        self.current_idx = 1
+        self.markers = []
+        self.needs_redraw = True
+
+        self.setWindowTitle(window_title)
+        self.setMinimumSize(400, 300)
+        self.resize(800, 600)
+
+        layout = QVBoxLayout(self)
+        self.image_label = _ZoomableLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("background-color: black;")
+        self.image_label.setMouseTracking(True)
+        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self.image_label, 1)
+
+        slider_layout = QHBoxLayout()
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setMinimum(0)
+        self.slider.setMaximum(len(overlay_video) - 1)
+        self.slider.setValue(1)
+        self.slider.valueChanged.connect(self._on_slider)
+        slider_layout.addWidget(self.slider)
+
+        self.frame_label = QLabel(f"1 / {len(overlay_video) - 1}")
+        slider_layout.addWidget(self.frame_label)
+        layout.addLayout(slider_layout)
+
+        self._init_zoom_pan()
+        self._connect_wheel()
+        self._original_pixmap = None
+        self._tr = (0, 0, 1, 1, 1, 1)
+        self._render_frame()
+
+    def _overlay_frame(self, idx):
+        return max(0, idx - 2)
+
+    def _next_worm_id(self):
+        return max((m['worm_id'] for m in self.markers), default=0) + 1
+
+    def _add_marker(self, x, y, worm_id):
+        self.markers.append({
+            'worm_id': worm_id,
+            'x': x,
+            'y': y,
+            'frame': self._overlay_frame(self.current_idx),
+        })
+        distinct = len({m['worm_id'] for m in self.markers})
+        print(f"Markers: {len(self.markers)}, Worms: {distinct}", end='\r')
+        self._render_frame()
+
+    def _render_frame(self):
+        idx = self.current_idx
+        frame = self.overlay_video[idx]
         if frame.dtype in (np.float32, np.float64):
             frame = np.clip(frame, 0, 255).astype(np.uint8)
 
-        cv2.imshow(window_name, frame)
-        
-        # 1. Primary exit: ESC or 'q' (most reliable across all environments)
-        key = cv2.waitKey(1) & 0xFF
-        if key in (27, ord('q')):
-            break
+        self._original_pixmap = _numpy_to_qpixmap(frame)
+        self._cap_pan()
+        pm, _, _, _, _ = self._paint_base(self._original_pixmap,
+                                          self.image_label.size())
 
-        # 2. Secondary exit: Window 'X' button (with explicit cleanup)
-        try:
-            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
-                break
-        except cv2.error:
-            # Explicitly destroy to prevent QT backend from keeping it alive
-            cv2.destroyWindow(window_name)
-            break
+        painter = QPainter(pm)
+        pen = QPen(QColor(255, 0, 0), 1)
+        painter.setPen(pen)
 
-    # Flush remaining events and clean up
-    cv2.waitKey(1)
-    cv2.destroyAllWindows()
+        worm_groups = {}
+        for m in self.markers:
+            wid = m['worm_id']
+            worm_groups.setdefault(wid, []).append((m['x'], m['y']))
 
-def count_assist(video_array, window_name='count assist', calibration=None):
-    """
-    Displays a video overlaid with motion trails, allowing the user to mark worms
-    by double-clicking. Use the backspace key to undo a marker.
+        for pts in worm_groups.values():
+            if len(pts) >= 2:
+                for i in range(len(pts) - 1):
+                    lx1, ly1 = self._image_to_label(pts[i][0], pts[i][1])
+                    lx2, ly2 = self._image_to_label(pts[i + 1][0], pts[i + 1][1])
+                    painter.drawLine(int(round(lx1)), int(round(ly1)),
+                                     int(round(lx2)), int(round(ly2)))
 
-    Hold **Shift** while double-clicking (or while performing a double-click-like
-    single click) to add another marker to the **same** worm instead of starting a
-    new worm.  Consecutive markers belonging to the same worm are connected by a
-    line segment on the overlay.
+        font = QFont("Arial", 16)
+        painter.setFont(font)
+        for m in self.markers:
+            lx, ly = self._image_to_label(m['x'], m['y'])
+            rx, ry = int(round(lx)), int(round(ly))
+            painter.setBrush(QColor(255, 0, 0))
+            painter.drawEllipse(rx - 3, ry - 3, 6, 6)
+            painter.drawText(rx + 4, ry - 4, str(m['worm_id']))
 
-    Args:
-        video_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the video frames.
-        window_name: Title of the display window (e.g., file name).
-        calibration: Optional Calibration object. When provided, adds unit-converted
-            columns for positions (x_mm, y_mm) and time (time_s).
+        painter.end()
 
-    Returns:
-        pandas.DataFrame with columns:
-            - worm_id: Sequential integer ID for each marked worm (1-based).
-            - x, y: Pixel coordinates of the marker.
-            - frame: Video frame number at which the marker was placed.
-            - x_mm, y_mm: Calibrated coordinates in mm (only if calibration provided).
-            - time_s: Estimated time in seconds (only if calibration provided).
-              Computed as frame / calibration.frames_per_second.
+        self.image_label.setPixmap(pm)
 
-    Raises:
-        ValueError: If all frames in the video are identical (no motion detected).
-    """
+    def _refresh_display(self):
+        self._render_frame()
+
+    def _on_slider(self, value):
+        self.current_idx = value
+        self._render_frame()
+        self.frame_label.setText(f"{value} / {self.num_frames - 1}")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._original_pixmap is not None:
+            self._cap_pan()
+            self._render_frame()
+
+    def mousePressEvent(self, event):
+        if not self._try_start_drag(event):
+            super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if not self._try_drag_move(event):
+            super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if not self._try_end_drag(event):
+            super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event: QMouseEvent):
+        if event.button() != Qt.LeftButton:
+            return
+
+        if self._original_pixmap is None:
+            return
+
+        label_pos = self.image_label.mapFrom(self, event.position().toPoint())
+        img_x, img_y = self._label_to_image(label_pos.x(), label_pos.y())
+
+        ow, oh = self._original_pixmap.width(), self._original_pixmap.height()
+        if img_x < 0 or img_y < 0 or img_x >= ow or img_y >= oh:
+            return
+
+        modifiers = QApplication.keyboardModifiers()
+        if (modifiers & Qt.ShiftModifier) and self.markers:
+            worm_id = self.markers[-1]['worm_id']
+        else:
+            worm_id = self._next_worm_id()
+
+        self._add_marker(int(img_x), int(img_y), worm_id)
+
+    def keyPressEvent(self, event: QKeyEvent):
+        if event.key() in (Qt.Key_Escape, Qt.Key_Q):
+            self.close()
+        elif event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            if self.markers:
+                self.markers.pop()
+                distinct = len({m['worm_id'] for m in self.markers}) if self.markers else 0
+                print(f"Markers: {len(self.markers)}, Worms: {distinct}", end='\r')
+                self._render_frame()
+        elif event.key() == Qt.Key_Left:
+            self.slider.setValue(max(0, self.current_idx - 1))
+        elif event.key() == Qt.Key_Right:
+            self.slider.setValue(min(self.num_frames - 1, self.current_idx + 1))
+        else:
+            super().keyPressEvent(event)
+
+    def get_dataframe(self):
+        df = pd.DataFrame(self.markers)
+        if df.empty:
+            return pd.DataFrame(columns=['worm_id', 'x', 'y', 'frame'])
+
+        if self.calibration is not None:
+            df['x_mm'] = self.calibration.distance_mm(df['x'].values)
+            df['y_mm'] = self.calibration.distance_mm(df['y'].values)
+            df['time_s'] = df['frame'].values / self.calibration.frames_per_second
+
+        return df
+
+
+def count_assist(video_array, window_name="count assist", calibration=None):
     num_frames = video_array.shape[0]
     if num_frames == 0:
         print("Warning: Empty video array.")
         return pd.DataFrame(columns=['worm_id', 'x', 'y', 'frame'])
 
-    # Calculate the motion overlay
     residuals, _, _ = fit_pixel_linear_model(video_array)
-    motion_proj = np.mean(residuals**2, axis=0)
+    motion_proj = np.mean(residuals ** 2, axis=0)
     motion_proj[motion_proj < 1] = 1
     motion_proj = np.log2(motion_proj.astype(np.float64))
     max_motion = np.max(motion_proj)
@@ -241,144 +590,15 @@ def count_assist(video_array, window_name='count assist', calibration=None):
     time_derivative = np.clip(time_derivative, 0, 255).astype(np.uint8)
 
     overlay_video = []
-    overlay_video.append(video_array[0]//2)
+    overlay_video.append(video_array[0] // 2)
     overlay_video.append(np.mean(video_array, axis=0) // 2 + motion_proj // 2)
-    for t in range(num_frames-1):
+    for t in range(num_frames - 1):
         overlay_video.append(
             np.clip((video_array[t] // 2) + (time_derivative[t] // 2), 0, 255).astype(np.uint8)
         )
 
-    # Map overlay index to reported frame number.
-    # Overlay indices 0, 1, 2 all correspond to frame 0 (first raw frame,
-    # mean projection, and first frame with derivative respectively);
-    # subsequent indices count up from 0.
-    def _overlay_frame(idx):
-        return max(0, idx - 2)
-
-    markers = []
-
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 0, 10, lambda x: None)
-
-    # Initialize window properly
-    cv2.waitKey(1)
-    cv2.destroyAllWindows()
-    cv2.waitKey(1)
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
-    cv2.createTrackbar('Frame', window_name, 1, len(overlay_video) - 1, lambda x: None)
-
-    state = {'current_idx': 1, 'needs_redraw': True}
-
-    state['last_click_time'] = 0
-    state['last_click_pos'] = None
-
-    def _next_worm_id():
-        return max((m['worm_id'] for m in markers), default=0) + 1
-
-    def _add_marker(x, y, worm_id):
-        markers.append({
-            'worm_id': worm_id,
-            'x': x,
-            'y': y,
-            'frame': _overlay_frame(state['current_idx'])
-        })
-        distinct = len({m['worm_id'] for m in markers})
-        print(f"Markers: {len(markers)}, Worms: {distinct}", end='\r')
-        state['needs_redraw'] = True
-
-    def mouse_callback(event, x, y, flags, param):
-        nonlocal state
-        if event == cv2.EVENT_LBUTTONDOWN:
-            now = cv2.getTickCount()
-            dt = (now - state['last_click_time']) / cv2.getTickFrequency()
-            if dt < 0.4 and state['last_click_pos'] == (x, y):
-                if (flags & cv2.EVENT_FLAG_SHIFTKEY) and markers:
-                    worm_id = markers[-1]['worm_id']
-                else:
-                    worm_id = _next_worm_id()
-                _add_marker(x, y, worm_id)
-            state['last_click_time'] = now
-            state['last_click_pos'] = (x, y)
-        elif event == cv2.EVENT_LBUTTONDBLCLK:
-            if (flags & cv2.EVENT_FLAG_SHIFTKEY) and markers:
-                worm_id = markers[-1]['worm_id']
-            else:
-                worm_id = _next_worm_id()
-            _add_marker(x, y, worm_id)
-
-    cv2.setMouseCallback(window_name, mouse_callback)
-
-    while True:
-        idx = cv2.getTrackbarPos('Frame', window_name)
-        if idx != state['current_idx']:
-            state['current_idx'] = idx
-            state['needs_redraw'] = True
-
-        if state['needs_redraw']:
-            frame = overlay_video[state['current_idx']]
-            if frame.dtype in (np.float32, np.float64):
-                frame = np.clip(frame, 0, 255).astype(np.uint8)
-            
-            # Convert to BGR to draw red dots
-            if len(frame.shape) == 2:
-                color_frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
-            else:
-                color_frame = frame.copy()
-
-            # Group markers by worm_id (preserving marker order within each worm)
-            worm_groups = {}
-            for m in markers:
-                wid = m['worm_id']
-                worm_groups.setdefault(wid, []).append((m['x'], m['y']))
-
-            # Draw connecting lines for each worm with 2+ markers
-            for pts in worm_groups.values():
-                if len(pts) >= 2:
-                    for i in range(len(pts) - 1):
-                        cv2.line(color_frame, pts[i], pts[i + 1], (0, 0, 255), 1)
-
-            # Draw marker circles and worm ID labels
-            for m in markers:
-                cv2.circle(color_frame, (m['x'], m['y']), 3, (0, 0, 255), -1)
-                cv2.putText(color_frame, str(m['worm_id']),
-                            (m['x'] + 4, m['y'] - 4),
-                            cv2.FONT_HERSHEY_SIMPLEX, 0.4, (0, 0, 255), 1)
-
-            cv2.imshow(window_name, color_frame)
-            state['needs_redraw'] = False
-
-        key = cv2.waitKey(30) & 0xFF
-        
-        # Primary exit: ESC or 'q'
-        if key in (27, ord('q')):
-            break
-            
-        # Undo: Backspace (8) or Delete (127)
-        if key in (8, 127):
-            if markers:
-                markers.pop()
-                distinct = len({m['worm_id'] for m in markers}) if markers else 0
-                print(f"Markers: {len(markers)}, Worms: {distinct}", end='\r')
-                state['needs_redraw'] = True
-
-        # Secondary exit: Window 'X' button
-        try:
-            if cv2.getWindowProperty(window_name, cv2.WND_PROP_VISIBLE) < 1:
-                break
-        except cv2.error:
-            cv2.destroyWindow(window_name)
-            break
-
-    cv2.waitKey(1)
-    cv2.destroyAllWindows()
-
-    df = pd.DataFrame(markers)
-    if df.empty:
-        df = pd.DataFrame(columns=['worm_id', 'x', 'y', 'frame'])
-
-    if calibration is not None and not df.empty:
-        df['x_mm'] = calibration.distance_mm(df['x'].values)
-        df['y_mm'] = calibration.distance_mm(df['y'].values)
-        df['time_s'] = df['frame'].values / calibration.frames_per_second
-
-    return df
+    _ensure_qapp()
+    dialog = _CountAssistDialog(overlay_video, window_title=window_name,
+                                calibration=calibration)
+    dialog.exec()
+    return dialog.get_dataframe()

@@ -15,6 +15,8 @@ import numpy as np
 import cv2
 
 __all__ = [
+    'black',
+    'white',
     'white_to_black',
     'black_to_white',
     'blue_to_red',
@@ -23,6 +25,10 @@ __all__ = [
     'middle_grey_last_black',
     'hsv_rainbow',
 ]
+
+black = np.array([[0,0,0]], dtype=np.float64)
+
+white = np.array([[255,255,255]], dtype=np.float64)
 
 white_to_black = []
 for i in range(256):

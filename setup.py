@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='wormtrails',
-    version='1.5.0',
+    version='1.6.0',
     author='Christopher Dante Ashih',
     description='A tool for generating track figures from video recordings of C. elegans',
     long_description=open('README.md').read(),
@@ -14,6 +14,7 @@ setup(
         'opencv-python',
         'pandas',
         'joblib',
+        'PySide6',
     ],
     entry_points={
         'console_scripts': [

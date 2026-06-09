@@ -54,6 +54,8 @@ from wormtrails.database import (
 )
 
 from wormtrails.colormaps import (
+    black,
+    white,
     white_to_black,
     black_to_white,
     blue_to_red,
