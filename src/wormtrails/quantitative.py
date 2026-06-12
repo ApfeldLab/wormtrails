@@ -682,7 +682,7 @@ def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minim
                     m['r_mm'] = calibration.distance_mm(r)
         return window_data
     
-    results = Parallel(n_jobs=n_jobs, prefer='processes', backend='loky')(
+    results = Parallel(n_jobs=n_jobs, prefer='threads')(
         delayed(_process_window)(t) for t in window_starts
     )
     

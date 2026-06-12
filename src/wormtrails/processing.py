@@ -253,7 +253,7 @@ def create_time_encoded_array_parallel(average_subtracted_array, colormap=np.arr
     if n_frames <= 20:
         return create_time_encoded_array(average_subtracted_array, colormap, window, scale_factor, offset, light_background)
     
-    results = Parallel(n_jobs=n_jobs, prefer='processes', backend='loky')(
+    results = Parallel(n_jobs=n_jobs, prefer='threads')(
         delayed(create_time_encoded_frame)(average_subtracted_array, colormap, window, i, scale_factor, offset, light_background)
         for i in range(n_frames)
     )
