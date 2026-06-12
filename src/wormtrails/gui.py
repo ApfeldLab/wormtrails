@@ -148,9 +148,15 @@ class WormtrailsGUI(QMainWindow):
         self.resize(740, 720)
 
         self.video_path = ""
-        self._motion = None
-        self._te_params = None
         self._last_count_assist_df = None
+
+        self._video = None
+        self._cached_video_path = ""
+        self._corrected = None
+        self._corrected_vig_key = None
+        self._motion = None
+        self._motion_key = None
+        self._te_params = None
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -202,6 +208,40 @@ class WormtrailsGUI(QMainWindow):
         if path:
             self.video_path = path
             self._path_entry.setText(path)
+
+    def _get_video(self):
+        if not self.video_path:
+            raise ValueError("No video file selected.")
+        if self._video is None or self.video_path != self._cached_video_path:
+            self._invalidate_caches()
+            self._video = wts.read_video_file(self.video_path)
+            self._cached_video_path = self.video_path
+        return self._video
+
+    def _ensure_corrected(self, vig_params):
+        video = self._get_video()
+        vig_key = str(sorted(vig_params.items()))
+        if self._corrected is None or self._corrected_vig_key != vig_key:
+            self._corrected = wts.correct_vignetting(video, **vig_params)
+            self._corrected_vig_key = vig_key
+            self._motion = None
+            self._motion_key = None
+        return self._corrected
+
+    def _ensure_motion(self, corrected, method, sub_params):
+        motion_key = (method, str(sorted(sub_params.items())))
+        if self._motion is None or self._motion_key != motion_key:
+            self._motion = self._compute_motion(corrected, method, sub_params)
+            self._motion_key = motion_key
+        return self._motion
+
+    def _invalidate_caches(self):
+        self._video = None
+        self._corrected = None
+        self._corrected_vig_key = None
+        self._motion = None
+        self._motion_key = None
+        self._te_params = None
 
     def measure_action_wrapper(self, action_func, status_msg="Processing..."):
         if not self.video_path:
@@ -346,28 +386,26 @@ class WormtrailsGUI(QMainWindow):
         }
 
     def _do_show_video(self):
-        video = wts.read_video_file(self.video_path)
+        video = self._get_video()
         _scheduler.schedule(lambda v=video: wts.show_video_array(v))
 
     def _do_preview_time_encoding(self):
-        video = wts.read_video_file(self.video_path)
         vig = self._get_vig_params()
-        corrected = wts.correct_vignetting(video, **vig)
+        corrected = self._ensure_corrected(vig)
         sub = self._get_vis_sub_params()
         method = self._vis_motion_method.currentText()
-        self._motion = self._compute_motion(corrected, method, sub)
+        self._motion = self._ensure_motion(corrected, method, sub)
         self._te_params = self._get_te_params()
         motion = self._motion
         te_params = self._te_params
         _scheduler.schedule(lambda m=motion, p=te_params: wts.show_time_encoding(m, **p))
 
     def _do_preview_single_frame(self):
-        video = wts.read_video_file(self.video_path)
         vig = self._get_vig_params()
-        corrected = wts.correct_vignetting(video, **vig)
+        corrected = self._ensure_corrected(vig)
         sub = self._get_vis_sub_params()
         method = self._vis_motion_method.currentText()
-        motion = self._compute_motion(corrected, method, sub)
+        motion = self._ensure_motion(corrected, method, sub)
         te_params = self._get_te_params()
         start_frame = _safe_int(self._te_start_frame.text(), 0)
         frame = create_time_encoded_frame(
@@ -382,12 +420,11 @@ class WormtrailsGUI(QMainWindow):
         _scheduler.schedule(lambda f=frame: wts.show_frame(f))
 
     def _do_save_frame(self):
-        video = wts.read_video_file(self.video_path)
         vig = self._get_vig_params()
-        corrected = wts.correct_vignetting(video, **vig)
+        corrected = self._ensure_corrected(vig)
         sub = self._get_vis_sub_params()
         method = self._vis_motion_method.currentText()
-        motion = self._compute_motion(corrected, method, sub)
+        motion = self._ensure_motion(corrected, method, sub)
         te_params = self._get_te_params()
         start_frame = _safe_int(self._te_start_frame.text(), 0)
         if self._te_vectorized.isChecked():
@@ -498,7 +535,7 @@ class WormtrailsGUI(QMainWindow):
         layout.addStretch()
 
     def _do_count_assist(self):
-        video = wts.read_video_file(self.video_path)
+        video = self._get_video()
         filename = os.path.basename(self.video_path)
         cal = self._get_calibration(self._assisted_px_per_mm, self._assisted_fps)
 
@@ -618,7 +655,7 @@ class WormtrailsGUI(QMainWindow):
         }
 
     def _do_count(self):
-        video = wts.read_video_file(self.video_path)
+        video = self._get_video()
         n_roaming, n_stationary, vis = wts.count_video(video, **self._get_count_params())
         _scheduler.schedule(lambda: self.auto_result.setText(
             f"Roaming: {n_roaming}   Stationary: {n_stationary}"))
@@ -626,7 +663,7 @@ class WormtrailsGUI(QMainWindow):
             _scheduler.schedule(lambda: wts.show_video_array(vis))
 
     def _do_count_simple(self):
-        video = wts.read_video_file(self.video_path)
+        video = self._get_video()
         cal = self._get_calibration(self._auto_px_per_mm, self._auto_fps)
         detail = self._simple_detail.isChecked()
         df = wts.count_simple(
@@ -749,11 +786,9 @@ class WormtrailsGUI(QMainWindow):
         }
 
     def _do_chemo(self):
-        video = wts.read_video_file(self.video_path)
         prep = self._get_chemo_prep_params()
-
-        corrected = wts.correct_vignetting(video, **prep['vig'])
-        motion = self._compute_motion(corrected, prep['motion_method'], prep['sub'])
+        corrected = self._ensure_corrected(prep['vig'])
+        motion = self._ensure_motion(corrected, prep['motion_method'], prep['sub']).copy()
         thresh_val = prep['threshold']
         motion[motion > thresh_val] = 255
         motion[motion <= thresh_val] = 0
