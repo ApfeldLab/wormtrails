@@ -715,6 +715,11 @@ class WormtrailsGUI(QMainWindow):
         self._chem_thresh.setText("30")
         layout.addWidget(prep)
 
+        plate = CollapsibleFrame("Plate Mask")
+        self._chem_mask_radius = plate.add_label_entry("Mask Radius (pixels, blank=no mask):", 0)
+        self._chem_mask_radius.setText("")
+        layout.addWidget(plate)
+
         anal_grp = QGroupBox("Analysis Parameters")
         anal_grid = QGridLayout(anal_grp)
         anal_grid.addWidget(QLabel("Time Window (frames):"), 0, 0)
@@ -745,6 +750,9 @@ class WormtrailsGUI(QMainWindow):
         self.chemo_bait_y = QLineEdit()
         self.chemo_bait_y.setMaximumWidth(80)
         bait_grid.addWidget(self.chemo_bait_y, 0, 3)
+        bait_pick_btn = QPushButton("Pick from Video")
+        bait_pick_btn.clicked.connect(self._do_pick_bait_spot)
+        bait_grid.addWidget(bait_pick_btn, 0, 4)
         layout.addWidget(bait_grp)
 
         chemo_cal = CollapsibleFrame("Calibration (for physical units)")
@@ -772,6 +780,8 @@ class WormtrailsGUI(QMainWindow):
         sub_end = _safe_int(sub_end_raw, -1)
         if sub_end_raw == "":
             sub_end = -1
+        mask_radius_raw = self._chem_mask_radius.text().strip()
+        mask_radius = _safe_int(mask_radius_raw, 0) if mask_radius_raw else 0
         return {
             'motion_method': self._chem_motion_method.currentText(),
             'vig': {'kernel_size': vig_kernel, 'use_median_blur': self._chem_vig_m.isChecked()},
@@ -783,7 +793,25 @@ class WormtrailsGUI(QMainWindow):
                 'light_background': self._chem_sub_l.isChecked(),
             },
             'threshold': _safe_int(self._chem_thresh.text(), 30),
+            'mask_radius': mask_radius,
         }
+
+    def _do_pick_bait_spot(self):
+        if not self.video_path:
+            QMessageBox.critical(self, "Error", "Please select a video file first.")
+            return
+        try:
+            video = self._get_video()
+        except ValueError as e:
+            QMessageBox.critical(self, "Error", str(e))
+            return
+
+        frame = video[0]
+        title = os.path.basename(self.video_path)
+        point = wts.select_bait_spot(frame, window_name=f"Select Bait Spot - {title}")
+        if point is not None:
+            self.chemo_bait_x.setText(str(point[0]))
+            self.chemo_bait_y.setText(str(point[1]))
 
     def _do_chemo(self):
         prep = self._get_chemo_prep_params()
@@ -792,6 +820,12 @@ class WormtrailsGUI(QMainWindow):
         thresh_val = prep['threshold']
         motion[motion > thresh_val] = 255
         motion[motion <= thresh_val] = 0
+
+        if prep['mask_radius']:
+            ref = np.mean(corrected, axis=0).astype(np.uint8)
+            plate_mask = wts.create_plate_mask(ref, mask_radius=prep['mask_radius'])
+            for i in range(motion.shape[0]):
+                motion[i][plate_mask == 0] = 0
 
         bx = self.chemo_bait_x.text().strip()
         by = self.chemo_bait_y.text().strip()

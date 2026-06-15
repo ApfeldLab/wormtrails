@@ -17,6 +17,7 @@ __all__ = [
     'show_frame',
     'show_time_encoding',
     'count_assist',
+    'select_bait_spot',
 ]
 
 
@@ -380,6 +381,80 @@ def show_time_encoding(average_subtracted_array,
     dialog.slider.setMaximum(max_slider)
     dialog.frame_label.setText(f"0 / {max_slider}")
     dialog.exec()
+
+
+class _BaitSpotDialog(QDialog, _ZoomPanMixin):
+    def __init__(self, frame, window_title="Select Bait Spot", parent=None):
+        super().__init__(parent)
+        self.selected_point = None
+        self._frame = frame
+        self.setWindowTitle(window_title)
+        self.setMinimumSize(400, 300)
+        self.resize(800, 600)
+
+        layout = QVBoxLayout(self)
+
+        instr = QLabel("Double-click on the bait spot. Esc or Q to cancel.")
+        layout.addWidget(instr)
+
+        self.image_label = _ZoomableLabel()
+        self.image_label.setAlignment(Qt.AlignCenter)
+        self.image_label.setStyleSheet("background-color: black;")
+        self.image_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        layout.addWidget(self.image_label, 1)
+
+        btn_layout = QHBoxLayout()
+        self._coord_label = QLabel("")
+        btn_layout.addWidget(self._coord_label)
+        btn_layout.addStretch()
+        confirm_btn = QPushButton("Confirm")
+        confirm_btn.clicked.connect(self.accept)
+        btn_layout.addWidget(confirm_btn)
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.clicked.connect(self.reject)
+        btn_layout.addWidget(cancel_btn)
+        layout.addLayout(btn_layout)
+
+        self._init_zoom_pan()
+        self._connect_wheel()
+
+        self._original_pixmap = _numpy_to_qpixmap(frame)
+        self._cap_pan()
+        self._refresh_display()
+
+    def _refresh_display(self):
+        if self._original_pixmap is None:
+            return
+        pm, _, _, _, _ = self._paint_base(self._original_pixmap, self.image_label.size())
+        self.image_label.setPixmap(pm)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        if self._original_pixmap is None:
+            return
+
+        label_pos = self.image_label.mapFrom(self, event.position().toPoint())
+        img_x, img_y = self._label_to_image(label_pos.x(), label_pos.y())
+
+        h, w = self._frame.shape[:2]
+        if 0 <= img_x < w and 0 <= img_y < h:
+            self.selected_point = (int(img_x), int(img_y))
+            self.accept()
+
+    def keyPressEvent(self, event):
+        if event.key() in (Qt.Key_Escape, Qt.Key_Q):
+            self.reject()
+        else:
+            super().keyPressEvent(event)
+
+
+def select_bait_spot(frame, window_name="Select Bait Spot"):
+    _ensure_qapp()
+    dialog = _BaitSpotDialog(frame, window_title=window_name)
+    if dialog.exec() == QDialog.Accepted:
+        return dialog.selected_point
+    return None
 
 
 class _CountAssistDialog(QDialog, _ZoomPanMixin):
