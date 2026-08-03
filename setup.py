@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name='wormtrails',
-    version='1.6.0',
+    version='2.0.0',
     author='Christopher Dante Ashih',
     description='A tool for generating track figures from video recordings of C. elegans',
     long_description=open('README.md').read(),
