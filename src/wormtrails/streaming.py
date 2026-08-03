@@ -227,6 +227,7 @@ def measure_chemotaxis_streaming(
                 m['relative_angle'] = rel_angle
                 if calibration is not None:
                     m['r_mm'] = calibration.distance_mm(r)
+                    m['time_s'] = t / calibration.frames_per_second
 
             worm_data.append(m)
 
@@ -485,8 +486,8 @@ def create_time_encoded_array_streaming(
     if save_path is not None:
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')  # Codec for .mp4
         fps = 60
-        width = cap.get(cv2.CAP_PROP_FRAME_WIDTH)
-        height = cap.get(cv2.CAP_PROP_FRAME_HEIGHT)
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         out = cv2.VideoWriter(save_path, fourcc, fps, (width, height))
 
     average_frame = get_average_frame(cap)

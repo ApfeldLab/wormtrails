@@ -8,9 +8,7 @@ __all__ = [
     'fit_pixel_linear_model',
     'create_track_array',
     'create_time_encoded_array',
-    'create_time_encoded_array_parallel',
     'create_time_encoded_frame',
-    'create_time_encoded_frame_vectorized',
     'add_timestamp',
     'align_frames',
 ]
@@ -316,7 +314,7 @@ def create_time_encoded_array(source, colormap=np.array([[0,0,0]]), window=20, s
     if mode == 'vectorized':
         return np.stack(
             [
-                create_time_encoded_frame_vectorized(
+                _create_time_encoded_frame_vectorized(
                     source, colormap, window, i, scale_factor, offset, light_background
                 )
                 for i in range(source.shape[0] - window)
@@ -325,7 +323,7 @@ def create_time_encoded_array(source, colormap=np.array([[0,0,0]]), window=20, s
         )
 
     if mode == 'parallel' or (mode == 'auto' and source.shape[0] - window > 20):
-        return create_time_encoded_array_parallel(
+        return _create_time_encoded_array_parallel(
             source, colormap, window, scale_factor, offset, light_background, n_jobs
         )
 
@@ -333,7 +331,7 @@ def create_time_encoded_array(source, colormap=np.array([[0,0,0]]), window=20, s
         source, colormap, window, scale_factor, offset, light_background
     )
 
-def create_time_encoded_array_parallel(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, scale_factor=1, offset=0, light_background=True, n_jobs=-1):
+def _create_time_encoded_array_parallel(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, scale_factor=1, offset=0, light_background=True, n_jobs=-1):
     """Parallel version of create_time_encoded_array using joblib.
     
     Each time-encoded frame is computed independently, making this ideal for parallelization.
@@ -409,7 +407,7 @@ def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,
             scale_factor, offset, light_background,
         )
     if mode == 'vectorized':
-        return create_time_encoded_frame_vectorized(
+        return _create_time_encoded_frame_vectorized(
             average_subtracted_array, colormap, window, start_time,
             scale_factor, offset, light_background,
         )
@@ -470,7 +468,7 @@ def _create_time_encoded_frame_sequential(average_subtracted_array, colormap, wi
 
     return time_encoded_frame
 
-def create_time_encoded_frame_vectorized(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, start_time=0, scale_factor=1, offset=0, light_background=True):
+def _create_time_encoded_frame_vectorized(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, start_time=0, scale_factor=1, offset=0, light_background=True):
     """
     Faster than create_time_encoded_frame but uses more memory.
     Projects along the time axis of the average subtracted array within a local frame window of the specified size to create a single frame with trails.

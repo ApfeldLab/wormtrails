@@ -11,7 +11,6 @@ __all__ = [
     'count_simple',
     'create_plate_mask',
     'measure_chemotaxis',
-    'measure_chemotaxis_parallel',
     'calculate_relative_metrics',
     'measure_component',
     'measure_window',
@@ -536,6 +535,8 @@ def measure_component(binary_window, component_mask, centroid_yx, time_window, c
     }
 
     if calibration is not None:
+        metrics['y_mm'] = calibration.distance_mm(position[0])
+        metrics['x_mm'] = calibration.distance_mm(position[1])
         metrics['speed_mm_s'] = calibration.speed_mm_s(speed)
         metrics['trail_radius_mm'] = calibration.distance_mm(trail_radius)
         metrics['worm_radius_mm'] = calibration.distance_mm(worm_radius)
@@ -624,7 +625,7 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
     n_windows = (binary_array.shape[0] - time_window + 1) // interval
 
     if mode == 'parallel' or (mode == 'auto' and n_windows > 15):
-        return measure_chemotaxis_parallel(
+        return _measure_chemotaxis_parallel(
             binary_array,
             time_window=time_window,
             interval=interval,
@@ -685,13 +686,14 @@ def _measure_chemotaxis_sequential(binary_array, time_window, interval, minimum_
                 m['relative_angle'] = rel_angle
                 if calibration is not None:
                     m['r_mm'] = calibration.distance_mm(r)
+                    m['time_s'] = t / calibration.frames_per_second
 
             worm_data.append(m)
 
     return pd.DataFrame(worm_data)
 
 
-def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None, calibration=None, n_jobs=-1):
+def _measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None, calibration=None, n_jobs=-1):
     """Parallel version of measure_chemotaxis using joblib.
     
     Each time window is processed independently, making this ideal for parallelization.
@@ -735,6 +737,7 @@ def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minim
                 m['relative_angle'] = rel_angle
                 if calibration is not None:
                     m['r_mm'] = calibration.distance_mm(r)
+                    m['time_s'] = t / calibration.frames_per_second
         return window_data
     
     results = Parallel(n_jobs=n_jobs, prefer='threads')(
