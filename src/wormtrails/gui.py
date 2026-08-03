@@ -168,8 +168,8 @@ class WormtrailsGUI(QMainWindow):
         self._path_label = QLabel("Video File:")
         file_row.addWidget(self._path_label)
         self._path_entry = QLineEdit()
-        self._path_entry.setReadOnly(True)
         self._path_entry.setMinimumWidth(300)
+        self._path_entry.editingFinished.connect(self._path_edited)
         file_row.addWidget(self._path_entry)
         self._browse_btn = QPushButton("Browse")
         self._browse_btn.clicked.connect(self.browse_file)
@@ -208,6 +208,12 @@ class WormtrailsGUI(QMainWindow):
         if path:
             self.video_path = path
             self._path_entry.setText(path)
+
+    def _path_edited(self):
+        path = self._path_entry.text().strip()
+        if path != self.video_path:
+            self.video_path = path
+            self._invalidate_caches()
 
     def _get_video(self):
         if not self.video_path:
