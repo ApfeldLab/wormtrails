@@ -15,6 +15,7 @@ setup(
         'pandas',
         'joblib',
         'PySide6',
+        'psutil',
     ],
     entry_points={
         'console_scripts': [

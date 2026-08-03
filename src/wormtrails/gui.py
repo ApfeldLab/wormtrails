@@ -301,8 +301,10 @@ class WormtrailsGUI(QMainWindow):
         self._te_offset.setText("0")
         self._te_start_frame = te.add_label_entry("Start Frame:", 4)
         self._te_light = te.add_checkbutton("Light Background", 5, default=True)
+        self._te_worm_length = te.add_label_entry("Worm Length (stream):", 6)
+        self._te_worm_length.setText("10")
         self._te_backend = te.add_combobox(
-            "Backend:", ["Auto", "Sequential", "Vectorized", "Parallel"], 6, default="Auto")
+            "Backend:", ["Auto", "Sequential", "Vectorized", "Parallel", "Stream"], 7, default="Auto")
         layout.addWidget(te)
 
         self.vis_progress = ProgressLabel()
@@ -401,22 +403,25 @@ class WormtrailsGUI(QMainWindow):
         _scheduler.schedule(lambda m=motion, p=te_params: wts.show_time_encoding(m, **p))
 
     def _do_preview_single_frame(self):
-        vig = self._get_vig_params()
-        corrected = self._ensure_corrected(vig)
-        sub = self._get_vis_sub_params()
-        method = self._vis_motion_method.currentText()
-        motion = self._ensure_motion(corrected, method, sub)
         te_params = self._get_te_params()
         start_frame = _safe_int(self._te_start_frame.text(), 0)
-        frame = create_time_encoded_frame(
-            motion,
-            colormap=te_params['colormap'],
-            window=te_params['window'],
-            start_time=start_frame,
-            scale_factor=te_params['scale_factor'],
-            offset=te_params['offset'],
-            light_background=te_params['light_background'],
-        )
+        if self._te_should_stream():
+            frame = self._stream_single_frame(te_params, start_frame)
+        else:
+            vig = self._get_vig_params()
+            corrected = self._ensure_corrected(vig)
+            sub = self._get_vis_sub_params()
+            method = self._vis_motion_method.currentText()
+            motion = self._ensure_motion(corrected, method, sub)
+            frame = create_time_encoded_frame(
+                motion,
+                colormap=te_params['colormap'],
+                window=te_params['window'],
+                start_time=start_frame,
+                scale_factor=te_params['scale_factor'],
+                offset=te_params['offset'],
+                light_background=te_params['light_background'],
+            )
         _scheduler.schedule(lambda f=frame: wts.show_frame(f))
 
     def _te_mode(self):
@@ -426,30 +431,78 @@ class WormtrailsGUI(QMainWindow):
             "Sequential": "sequential",
             "Vectorized": "vectorized",
             "Parallel": "parallel",
+            "Stream": "stream",
         }.get(self._te_backend.currentText(), "auto")
 
+    def _te_should_stream(self):
+        """Resolves whether to stream for the current time-encoding inputs.
+
+        Streaming is forced by the explicit 'Stream' selection, and is chosen
+        automatically for 'Auto' when system memory is tight: we stream whenever
+        available memory is less than 50% more than the in-memory backends are
+        expected to use.
+        """
+        mode = self._te_mode()
+        if mode == "stream":
+            return True
+        if mode != "auto":
+            return False
+        if not self.video_path:
+            return False
+        motion = self._motion
+        if motion is None:
+            return False
+        expected = wts.estimated_time_encoding_bytes(motion.shape, self._get_te_params()['window'])
+        return wts.should_stream(expected)
+
+    def _stream_single_frame(self, te_params, start_frame):
+        """Builds one time-encoded frame directly from the source video via streaming."""
+        import cv2
+        cap = cv2.VideoCapture(self.video_path)
+        if not cap.isOpened():
+            raise ValueError(f"Unable to open video file: {self.video_path}")
+        try:
+            avg = wts.get_average_frame(cap)
+            worm_length = _safe_int(self._te_worm_length.text(), 10)
+            return wts.get_time_encoded_frame(
+                cap,
+                reference_frame=avg,
+                kernel_radius=worm_length,
+                scale_factor=te_params['scale_factor'],
+                offset=te_params['offset'],
+                start_frame=start_frame,
+                window=te_params['window'],
+                colormap=te_params['colormap'],
+                light_background=te_params['light_background'],
+            )
+        finally:
+            cap.release()
+
     def _do_save_frame(self):
-        vig = self._get_vig_params()
-        corrected = self._ensure_corrected(vig)
-        sub = self._get_vis_sub_params()
-        method = self._vis_motion_method.currentText()
-        motion = self._ensure_motion(corrected, method, sub)
         te_params = self._get_te_params()
         start_frame = _safe_int(self._te_start_frame.text(), 0)
-        mode = self._te_mode()
-        if mode == "parallel":
-            # A single frame has no parallel benefit; fall back to sequential.
-            mode = "sequential"
-        frame = create_time_encoded_frame(
-            motion,
-            colormap=te_params['colormap'],
-            window=te_params['window'],
-            start_time=start_frame,
-            scale_factor=te_params['scale_factor'],
-            offset=te_params['offset'],
-            light_background=te_params['light_background'],
-            mode=mode,
-        )
+        if self._te_should_stream():
+            frame = self._stream_single_frame(te_params, start_frame)
+        else:
+            vig = self._get_vig_params()
+            corrected = self._ensure_corrected(vig)
+            sub = self._get_vis_sub_params()
+            method = self._vis_motion_method.currentText()
+            motion = self._ensure_motion(corrected, method, sub)
+            mode = self._te_mode()
+            if mode == "parallel":
+                # A single frame has no parallel benefit; fall back to sequential.
+                mode = "sequential"
+            frame = create_time_encoded_frame(
+                motion,
+                colormap=te_params['colormap'],
+                window=te_params['window'],
+                start_time=start_frame,
+                scale_factor=te_params['scale_factor'],
+                offset=te_params['offset'],
+                light_background=te_params['light_background'],
+                mode=mode,
+            )
         _scheduler.schedule(lambda f=frame: self._save_frame_dialog(f))
 
     def _save_frame_dialog(self, frame):
@@ -463,21 +516,39 @@ class WormtrailsGUI(QMainWindow):
         QMessageBox.information(self, "Success", f"Saved frame to {path}")
 
     def _do_save_video(self):
-        if self._motion is None:
-            QMessageBox.critical(self, "Error", "Please preview time encoding first.")
-            return
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Time Encoded Video", "",
             "MP4 Files (*.mp4);;AVI Files (*.avi)")
         if not path:
             return
+        te = self._get_te_params()
+        if self._te_should_stream():
+            # Streaming writes the time-encoded video directly to disk from the
+            # source file, reading frames one at a time to save memory.
+            worm_length = _safe_int(self._te_worm_length.text(), 10)
+            wts.create_time_encoded_array(
+                self.video_path,
+                colormap=te['colormap'],
+                window=te['window'],
+                scale_factor=te['scale_factor'],
+                offset=te['offset'],
+                light_background=te['light_background'],
+                mode='stream',
+                save_path=path,
+                worm_length=worm_length,
+            )
+            QMessageBox.information(self, "Success", f"Saved video to {path}")
+            return
+        if self._motion is None:
+            QMessageBox.critical(self, "Error", "Please preview time encoding first.")
+            return
         trails = wts.create_time_encoded_array(
             self._motion,
-            colormap=self._te_params['colormap'],
-            window=self._te_params['window'],
-            scale_factor=self._te_params['scale_factor'],
-            offset=self._te_params['offset'],
-            light_background=self._te_params['light_background'],
+            colormap=te['colormap'],
+            window=te['window'],
+            scale_factor=te['scale_factor'],
+            offset=te['offset'],
+            light_background=te['light_background'],
             mode=self._te_mode(),
         )
         if path.endswith('.avi'):
@@ -707,6 +778,10 @@ class WormtrailsGUI(QMainWindow):
         self._chem_sub_l = prep.add_checkbutton("Subtract: Light Background", 7, default=True)
         self._chem_thresh = prep.add_label_entry("Threshold Value:", 8)
         self._chem_thresh.setText("30")
+        self._chem_stream_wl = prep.add_label_entry("Stream Worm Length:", 9)
+        self._chem_stream_wl.setText("10")
+        self._chem_stream_thresh = prep.add_label_entry("Stream Threshold:", 10)
+        self._chem_stream_thresh.setText("3")
         layout.addWidget(prep)
 
         plate = CollapsibleFrame("Plate Mask")
@@ -755,7 +830,7 @@ class WormtrailsGUI(QMainWindow):
         layout.addWidget(chemo_cal)
 
         self._chemo_backend = QComboBox()
-        self._chemo_backend.addItems(["Auto", "Sequential", "Parallel"])
+        self._chemo_backend.addItems(["Auto", "Sequential", "Parallel", "Stream"])
         self._chemo_backend.setCurrentText("Auto")
         backend_layout = QHBoxLayout()
         backend_layout.addWidget(QLabel("Backend:"))
@@ -793,6 +868,8 @@ class WormtrailsGUI(QMainWindow):
             },
             'threshold': _safe_int(self._chem_thresh.text(), 30),
             'mask_radius': mask_radius,
+            'stream_worm_length': _safe_int(self._chem_stream_wl.text(), 10),
+            'stream_threshold': _safe_int(self._chem_stream_thresh.text(), 3),
         }
 
     def _do_pick_bait_spot(self):
@@ -812,19 +889,48 @@ class WormtrailsGUI(QMainWindow):
             self.chemo_bait_x.setText(str(point[0]))
             self.chemo_bait_y.setText(str(point[1]))
 
+    def _video_shape(self):
+        """Returns (T, H, W) of the selected video from metadata without loading frames."""
+        import cv2
+        cap = cv2.VideoCapture(self.video_path)
+        try:
+            if not cap.isOpened():
+                raise ValueError(f"Unable to open video file: {self.video_path}")
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            n = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            return (n, h, w)
+        finally:
+            cap.release()
+
+    def _chemo_mode(self):
+        """Maps the chemotaxis Backend combobox selection to a mode string."""
+        return {
+            "Auto": "auto",
+            "Sequential": "sequential",
+            "Parallel": "parallel",
+            "Stream": "stream",
+        }.get(self._chemo_backend.currentText(), "auto")
+
+    def _chemo_should_stream(self):
+        """Resolves whether to stream for chemotaxis measurement.
+
+        Streaming is forced by the explicit 'Stream' selection and chosen
+        automatically for 'Auto' when available memory is less than 50% more
+        than the in-memory backend is expected to use.
+        """
+        mode = self._chemo_mode()
+        if mode == "stream":
+            return True
+        if mode != "auto":
+            return False
+        if not self.video_path:
+            return False
+        shape = self._video_shape()
+        return wts.should_stream(wts.estimated_binary_bytes(shape))
+
     def _do_chemo(self):
         prep = self._get_chemo_prep_params()
-        corrected = self._ensure_corrected(prep['vig'])
-        motion = self._ensure_motion(corrected, prep['motion_method'], prep['sub']).copy()
-        thresh_val = prep['threshold']
-        motion[motion > thresh_val] = 255
-        motion[motion <= thresh_val] = 0
-
-        if prep['mask_radius']:
-            ref = np.mean(corrected, axis=0).astype(np.uint8)
-            plate_mask = wts.create_plate_mask(ref, mask_radius=prep['mask_radius'])
-            for i in range(motion.shape[0]):
-                motion[i][plate_mask == 0] = 0
 
         bx = self.chemo_bait_x.text().strip()
         by = self.chemo_bait_y.text().strip()
@@ -838,21 +944,48 @@ class WormtrailsGUI(QMainWindow):
                 return
 
         cal = self._get_calibration(self._chemo_px_per_mm, self._chemo_fps)
-        mode = {
-            "Auto": "auto",
-            "Sequential": "sequential",
-            "Parallel": "parallel",
-        }.get(self._chemo_backend.currentText(), "auto")
-        df = wts.measure_chemotaxis(
-            motion,
-            time_window=_safe_int(self.chemo_window.text(), 10),
-            interval=_safe_int(self.chemo_int.text(), 60),
-            minimum_size=_safe_int(self.chemo_min.text(), 10),
-            maximum_size=_safe_int(self.chemo_max.text(), 1000),
-            test_spot=test_spot,
-            calibration=cal,
-            mode=mode,
-        )
+        window = _safe_int(self.chemo_window.text(), 10)
+        interval = _safe_int(self.chemo_int.text(), 60)
+        min_sz = _safe_int(self.chemo_min.text(), 10)
+        max_sz = _safe_int(self.chemo_max.text(), 1000)
+
+        if self._chemo_should_stream():
+            # Streaming reads windows from disk; it performs its own
+            # thresholding and (by design) does not apply the plate mask.
+            df = wts.measure_chemotaxis_streaming(
+                self.video_path,
+                thresh=prep['stream_threshold'],
+                worm_length=prep['stream_worm_length'],
+                window=window,
+                interval=interval,
+                minimum_size=min_sz,
+                maximum_size=max_sz,
+                test_spot=test_spot,
+                calibration=cal,
+            )
+        else:
+            corrected = self._ensure_corrected(prep['vig'])
+            motion = self._ensure_motion(corrected, prep['motion_method'], prep['sub']).copy()
+            thresh_val = prep['threshold']
+            motion[motion > thresh_val] = 255
+            motion[motion <= thresh_val] = 0
+
+            if prep['mask_radius']:
+                ref = np.mean(corrected, axis=0).astype(np.uint8)
+                plate_mask = wts.create_plate_mask(ref, mask_radius=prep['mask_radius'])
+                for i in range(motion.shape[0]):
+                    motion[i][plate_mask == 0] = 0
+
+            df = wts.measure_chemotaxis(
+                motion,
+                time_window=window,
+                interval=interval,
+                minimum_size=min_sz,
+                maximum_size=max_sz,
+                test_spot=test_spot,
+                calibration=cal,
+                mode=self._chemo_mode(),
+            )
 
         def request_save():
             save_path, _ = QFileDialog.getSaveFileName(

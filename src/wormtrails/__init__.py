@@ -76,4 +76,11 @@ from wormtrails.colormaps import (
     hsv_rainbow
 )
 
+from wormtrails.memory import (
+    available_memory_bytes,
+    should_stream,
+    estimated_time_encoding_bytes,
+    estimated_binary_bytes
+)
+
 from wormtrails.gui import main as start_gui
