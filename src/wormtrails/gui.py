@@ -783,25 +783,28 @@ class WormtrailsGUI(QMainWindow):
         desc.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         layout.addWidget(desc)
 
-        prep = CollapsibleFrame("Preprocessing")
-        self._chem_motion_method = prep.add_combobox(
-            "Motion Method:", ["subtract_average", "linear_model_residuals"], 0,
-            default="subtract_average")
-        self._chem_vig_k = prep.add_label_entry("Vignetting Kernel (blank=auto):", 1)
-        self._chem_vig_m = prep.add_checkbutton("Vignetting: Median Blur", 2)
-        self._chem_sub_s = prep.add_label_entry("Subtract Avg Start:", 3)
-        self._chem_sub_s.setText("0")
-        self._chem_sub_e = prep.add_label_entry("Subtract Avg End (blank=last):", 4)
-        self._chem_sub_a = prep.add_checkbutton("Subtract: Absolute Diff", 5, default=True)
-        self._chem_sub_p = prep.add_checkbutton("Subtract: Use Projection", 6)
-        self._chem_sub_l = prep.add_checkbutton("Subtract: Light Background", 7, default=True)
-        self._chem_thresh = prep.add_label_entry("Threshold Value:", 8)
-        self._chem_thresh.setText("30")
-        self._chem_stream_wl = prep.add_label_entry("Stream Worm Length:", 9)
+        prep = CollapsibleFrame("Streaming Preprocessing")
+        self._chem_stream_wl = prep.add_label_entry("Stream Worm Length:", 0)
         self._chem_stream_wl.setText("10")
-        self._chem_stream_thresh = prep.add_label_entry("Stream Threshold:", 10)
+        self._chem_stream_thresh = prep.add_label_entry("Stream Threshold:", 1)
         self._chem_stream_thresh.setText("3")
         layout.addWidget(prep)
+
+        non_stream = CollapsibleFrame("In-Memory Preprocessing (Sequential / Parallel only)")
+        self._chem_motion_method = non_stream.add_combobox(
+            "Motion Method:", ["subtract_average", "linear_model_residuals"], 0,
+            default="subtract_average")
+        self._chem_vig_k = non_stream.add_label_entry("Vignetting Kernel (blank=auto):", 1)
+        self._chem_vig_m = non_stream.add_checkbutton("Vignetting: Median Blur", 2)
+        self._chem_sub_s = non_stream.add_label_entry("Subtract Avg Start:", 3)
+        self._chem_sub_s.setText("0")
+        self._chem_sub_e = non_stream.add_label_entry("Subtract Avg End (blank=last):", 4)
+        self._chem_sub_a = non_stream.add_checkbutton("Subtract: Absolute Diff", 5, default=True)
+        self._chem_sub_p = non_stream.add_checkbutton("Subtract: Use Projection", 6)
+        self._chem_sub_l = non_stream.add_checkbutton("Subtract: Light Background", 7, default=True)
+        self._chem_thresh = non_stream.add_label_entry("Threshold Value:", 8)
+        self._chem_thresh.setText("30")
+        layout.addWidget(non_stream)
 
         plate = CollapsibleFrame("Plate Mask")
         self._chem_mask_radius = plate.add_label_entry("Mask Radius (pixels, blank=no mask):", 0)
@@ -850,7 +853,7 @@ class WormtrailsGUI(QMainWindow):
 
         self._chemo_backend = QComboBox()
         self._chemo_backend.addItems(["Auto", "Sequential", "Parallel", "Stream"])
-        self._chemo_backend.setCurrentText("Auto")
+        self._chemo_backend.setCurrentText("Stream")
         backend_layout = QHBoxLayout()
         backend_layout.addWidget(QLabel("Backend:"))
         backend_layout.addWidget(self._chemo_backend)
