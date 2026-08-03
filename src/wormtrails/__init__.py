@@ -45,6 +45,16 @@ from wormtrails.quantitative import (
     measure_window
 )
 
+from wormtrails.streaming import (
+    show_motion,
+    show_time_encoded_frame,
+    measure_chemotaxis_streaming,
+    create_time_encoded_array_streaming,
+    get_average_frame,
+    get_motion,
+    get_time_encoded_frame
+)
+
 from wormtrails.database import (
     create_database,
     write_measurements,
