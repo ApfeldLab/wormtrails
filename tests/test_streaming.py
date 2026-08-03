@@ -1,8 +1,7 @@
 import unittest
+from unittest import mock
 import numpy as np
 import cv2
-import tempfile
-import os
 from wormtrails.streaming import (
     get_average_frame,
     get_motion,
@@ -15,31 +14,63 @@ from wormtrails.streaming import (
 from wormtrails.quantitative import Calibration
 
 
-def _make_test_video(path, n_frames=8, height=60, width=80, moving_rows=(20, 45)):
-    """Writes a small synthetic AVI where a bright bar moves down the screen."""
-    if os.path.exists(path):
-        return path
-    from wormtrails.file_io import write_avi
-    video = np.full((n_frames, height, width), 0, dtype=np.uint8)
+class MemoryCap:
+    """In-memory stand-in for cv2.VideoCapture that reads frames from a Numpy
+    array instead of a file on disk. Frames are returned as BGR, matching the
+    format OpenCV's VideoCapture produces, so the streaming helpers behave
+    identically without writing a temporary video file."""
+
+    def __init__(self, frames):
+        self._frames = np.asarray(frames)
+        self._pos = 0
+
+    def isOpened(self):
+        return True
+
+    def read(self):
+        if self._pos >= len(self._frames):
+            return False, None
+        frame = self._frames[self._pos]
+        self._pos += 1
+        if frame.ndim == 2:
+            frame = cv2.cvtColor(frame, cv2.COLOR_GRAY2BGR)
+        return True, frame
+
+    def get(self, prop_id):
+        if prop_id == cv2.CAP_PROP_FRAME_COUNT:
+            return len(self._frames)
+        if prop_id == cv2.CAP_PROP_FRAME_WIDTH:
+            return self._frames.shape[2]
+        if prop_id == cv2.CAP_PROP_FRAME_HEIGHT:
+            return self._frames.shape[1]
+        if prop_id == cv2.CAP_PROP_POS_FRAMES:
+            return self._pos
+        return 0
+
+    def set(self, prop_id, value):
+        if prop_id == cv2.CAP_PROP_POS_FRAMES:
+            self._pos = int(value)
+            return True
+        return False
+
+    def release(self):
+        pass
+
+
+def _make_frames(n_frames=8, height=60, width=80, moving_rows=(20, 45)):
+    """Builds a small synthetic video in RAM where a bright bar moves down."""
+    video = np.full((n_frames, height, width), 5, dtype=np.uint8)
     for t in range(n_frames):
         row = moving_rows[0] + t
         video[t, row:row + 6, 30:50] = 200
-    write_avi(video, path, fps=10)
-    return path
+    return video
 
 
 class TestStreamingHelpers(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp()
-        cls.video_path = _make_test_video(os.path.join(cls._tmpdir, "test.avi"))
-        cls.cap = cv2.VideoCapture(cls.video_path)
-
-    @classmethod
-    def tearDownClass(cls):
-        cls.cap.release()
-        import shutil
-        shutil.rmtree(cls._tmpdir, ignore_errors=True)
+        cls.frames = _make_frames()
+        cls.cap = MemoryCap(cls.frames)
 
     def test_get_average_frame_shape(self):
         avg = get_average_frame(self.cap)
@@ -71,13 +102,7 @@ class TestStreamingHelpers(unittest.TestCase):
 class TestStreamingPipeline(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls._tmpdir = tempfile.mkdtemp()
-        cls.video_path = _make_test_video(os.path.join(cls._tmpdir, "test.avi"))
-
-    @classmethod
-    def tearDownClass(cls):
-        import shutil
-        shutil.rmtree(cls._tmpdir, ignore_errors=True)
+        cls.frames = _make_frames()
 
     def test_nonexistent_file_raises(self):
         with self.assertRaises(ValueError):
@@ -90,15 +115,29 @@ class TestStreamingPipeline(unittest.TestCase):
             create_time_encoded_array_streaming("/nonexistent/path/video.avi")
 
     def test_measure_chemotaxis_streaming_returns_df(self):
-        df = measure_chemotaxis_streaming(
-            self.video_path, thresh=5, worm_length=5,
-            window=4, interval=3, minimum_size=10, maximum_size=1000,
-            test_spot=(30, 40), calibration=Calibration(pixels_per_mm=10),
-        )
+        # The streaming function opens the source via cv2.VideoCapture(path).
+        # Substitute an in-memory cap so no temporary file is written.
+        with mock.patch("cv2.VideoCapture", return_value=MemoryCap(self.frames)):
+            df = measure_chemotaxis_streaming(
+                "in-memory", thresh=5, worm_length=5,
+                window=4, interval=3, minimum_size=10, maximum_size=1000,
+                test_spot=(30, 40), calibration=Calibration(pixels_per_mm=10),
+            )
         self.assertFalse(df.empty)
         for col in ("y", "x", "direction_y", "direction_x", "speed", "time",
                     "r", "theta", "relative_angle", "r_mm"):
             self.assertIn(col, df.columns)
+
+    def test_measure_chemotaxis_streaming_accepts_mask_radius(self):
+        # mask_radius=0 disables masking; a positive radius must be accepted
+        # and applied without error.
+        with mock.patch("cv2.VideoCapture", return_value=MemoryCap(self.frames)):
+            masked = measure_chemotaxis_streaming(
+                "in-memory", thresh=5, worm_length=5,
+                window=4, interval=3, minimum_size=10, maximum_size=1000,
+                mask_radius=30,
+            )
+        self.assertTrue(isinstance(masked, __import__("pandas").DataFrame))
 
 
 if __name__ == "__main__":
