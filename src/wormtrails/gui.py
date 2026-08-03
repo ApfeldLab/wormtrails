@@ -392,14 +392,27 @@ class WormtrailsGUI(QMainWindow):
         _scheduler.schedule(lambda v=video: wts.show_video_array(v))
 
     def _do_preview_time_encoding(self):
+        te_params = self._get_te_params()
+        if self._te_should_stream():
+            # Stream straight from the source file: builds each trail frame on
+            # demand without ever loading the full video (or motion array) into
+            # memory.
+            worm_length = _safe_int(self._te_worm_length.text(), 10)
+            _scheduler.schedule(lambda p=te_params, wl=worm_length:
+                                wts.show_time_encoding_streaming(
+                                    self.video_path, colormap=p['colormap'],
+                                    window=p['window'], scale_factor=p['scale_factor'],
+                                    offset=p['offset'],
+                                    light_background=p['light_background'],
+                                    worm_length=wl))
+            return
         vig = self._get_vig_params()
         corrected = self._ensure_corrected(vig)
         sub = self._get_vis_sub_params()
         method = self._vis_motion_method.currentText()
         self._motion = self._ensure_motion(corrected, method, sub)
-        self._te_params = self._get_te_params()
+        self._te_params = te_params
         motion = self._motion
-        te_params = self._te_params
         _scheduler.schedule(lambda m=motion, p=te_params: wts.show_time_encoding(m, **p))
 
     def _do_preview_single_frame(self):

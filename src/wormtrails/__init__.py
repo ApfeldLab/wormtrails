@@ -16,6 +16,7 @@ from wormtrails.display import (
     show_video_array,
     show_frame,
     show_time_encoding,
+    show_time_encoding_streaming,
     count_assist,
     select_bait_spot
 )

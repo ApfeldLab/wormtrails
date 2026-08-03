@@ -16,6 +16,7 @@ __all__ = [
     'show_video_array',
     'show_frame',
     'show_time_encoding',
+    'show_time_encoding_streaming',
     'count_assist',
     'select_bait_spot',
 ]
@@ -203,11 +204,15 @@ class _ZoomPanMixin:
 
 
 class _VideoPlayerDialog(QDialog, _ZoomPanMixin):
-    def __init__(self, video_array, window_title="Video", show_slider=True,
-                 frame_callback=None, parent=None):
+    def __init__(self, video_array=None, window_title="Video", show_slider=True,
+                 frame_callback=None, parent=None, frame_provider=None, num_frames=None):
         super().__init__(parent)
         self.video_array = video_array
-        self.num_frames = video_array.shape[0]
+        self.frame_provider = frame_provider
+        if frame_provider is not None:
+            self.num_frames = int(num_frames)
+        else:
+            self.num_frames = video_array.shape[0]
         self.current_idx = 0
         self.playing = False
         self.frame_callback = frame_callback
@@ -259,7 +264,10 @@ class _VideoPlayerDialog(QDialog, _ZoomPanMixin):
         if idx < 0 or idx >= self.num_frames:
             return
         self.current_idx = idx
-        frame_data = self.video_array[idx]
+        if self.frame_provider is not None:
+            frame_data = self.frame_provider(idx)
+        else:
+            frame_data = self.video_array[idx]
 
         if self.frame_callback:
             frame_data = self.frame_callback(idx, frame_data)
@@ -381,6 +389,74 @@ def show_time_encoding(average_subtracted_array,
     dialog.slider.setMaximum(max_slider)
     dialog.frame_label.setText(f"0 / {max_slider}")
     dialog.exec()
+
+
+def show_time_encoding_streaming(video_path,
+                                 colormap=np.array([[0, 0, 0]]),
+                                 window=20, scale_factor=1, offset=0,
+                                 light_background=True,
+                                 window_name="esc to exit", worm_length=10):
+    """Previews a time-encoded trail visualization, streaming frames from disk.
+
+    Unlike :func:`show_time_encoding`, which requires the full motion array in
+    memory, this reads frames one at a time from the source video file. A
+    stationary reference frame is computed once, and each slider position builds
+    its trail frame on demand. Memory use is therefore independent of video
+    length.
+
+    Args:
+        video_path: String path to the video file.
+        colormap: Numpy array of shape (N, 3) of BGR colors applied to trails.
+        window: Integer number of frames per trail. Default is 20.
+        scale_factor: Float brightness scaling factor. Default is 1.
+        offset: Float brightness offset. Default is 0.
+        light_background: Boolean; True renders dark trails on light. Default True.
+        window_name: String title for the player window. Default "esc to exit".
+        worm_length: Integer typical worm length in pixels, used as the high-pass
+            kernel radius (motion filter). Default is 10.
+
+    Raises:
+        ValueError: If the video file cannot be opened or read.
+    """
+    import cv2
+    from .streaming import get_average_frame, get_time_encoded_frame
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        raise ValueError(f"Unable to open video file: {video_path}")
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    # Compute the stationary reference once, then stream each frame on demand.
+    reference_frame = get_average_frame(cap)
+
+    def provider(idx):
+        return get_time_encoded_frame(
+            cap,
+            reference_frame=reference_frame,
+            kernel_radius=worm_length,
+            scale_factor=scale_factor,
+            offset=offset,
+            start_frame=idx,
+            window=window,
+            colormap=colormap,
+            light_background=light_background,
+        )
+
+    _ensure_qapp()
+
+    max_slider = max(0, total_frames - window)
+    dialog = _VideoPlayerDialog(
+        video_array=None,
+        window_title=window_name,
+        frame_provider=provider,
+        num_frames=total_frames,
+    )
+    dialog.slider.setMaximum(max_slider)
+    dialog.frame_label.setText(f"0 / {max_slider}")
+    try:
+        dialog.exec()
+    finally:
+        cap.release()
 
 
 class _BaitSpotDialog(QDialog, _ZoomPanMixin):
