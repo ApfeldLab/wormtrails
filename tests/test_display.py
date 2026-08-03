@@ -16,6 +16,23 @@ class TestDisplay(unittest.TestCase):
         result = count_assist(video)
         self.assertTrue(result.empty)
         self.assertIn('worm_id', result.columns)
+        self.assertIn('phenotype', result.columns)
+
+    def test_count_assist_dialog_marker_phenotype(self):
+        from unittest import mock
+        from wormtrails.display import _CountAssistDialog
+        dialog = _CountAssistDialog.__new__(_CountAssistDialog)
+        dialog.markers = []
+        dialog.current_idx = 1
+        dialog.num_frames = 3
+        dialog.overlay_video = [None] * 3
+        with mock.patch.object(dialog, '_render_frame'):
+            dialog.current_phenotype = 'r'
+            dialog._add_marker(10, 20, 1)
+            dialog.current_phenotype = None
+            dialog._add_marker(30, 40, 2)
+        self.assertEqual(dialog.markers[0]['phenotype'], 'r')
+        self.assertIsNone(dialog.markers[1]['phenotype'])
 
 
 if __name__ == '__main__':

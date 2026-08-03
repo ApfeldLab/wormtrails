@@ -542,6 +542,8 @@ class _CountAssistDialog(QDialog, _ZoomPanMixin):
         self.current_idx = 1
         self.markers = []
         self.needs_redraw = True
+        self._held_phenotype_keys = {}
+        self.current_phenotype = None
 
         self.setWindowTitle(window_title)
         self.setMinimumSize(400, 300)
@@ -585,6 +587,7 @@ class _CountAssistDialog(QDialog, _ZoomPanMixin):
             'x': x,
             'y': y,
             'frame': self._overlay_frame(self.current_idx),
+            'phenotype': self.current_phenotype,
         })
         distinct = len({m['worm_id'] for m in self.markers})
         print(f"Markers: {len(self.markers)}, Worms: {distinct}", end='\r')
@@ -680,6 +683,7 @@ class _CountAssistDialog(QDialog, _ZoomPanMixin):
         self._add_marker(int(img_x), int(img_y), worm_id)
 
     def keyPressEvent(self, event: QKeyEvent):
+        self._track_phenotype_key(event, pressed=True)
         if event.key() in (Qt.Key_Escape, Qt.Key_Q):
             self.close()
         elif event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
@@ -695,10 +699,27 @@ class _CountAssistDialog(QDialog, _ZoomPanMixin):
         else:
             super().keyPressEvent(event)
 
+    def keyReleaseEvent(self, event: QKeyEvent):
+        self._track_phenotype_key(event, pressed=False)
+        super().keyReleaseEvent(event)
+
+    def _track_phenotype_key(self, event, pressed):
+        text = event.text()
+        if text and text.isprintable():
+            key = event.key()
+            if pressed:
+                self._held_phenotype_keys[key] = text
+            else:
+                self._held_phenotype_keys.pop(key, None)
+            self.current_phenotype = (
+                list(self._held_phenotype_keys.values())[-1]
+                if self._held_phenotype_keys else None
+            )
+
     def get_dataframe(self):
         df = pd.DataFrame(self.markers)
         if df.empty:
-            return pd.DataFrame(columns=['worm_id', 'x', 'y', 'frame'])
+            return pd.DataFrame(columns=['worm_id', 'x', 'y', 'frame', 'phenotype'])
 
         if self.calibration is not None:
             df['x_mm'] = self.calibration.distance_mm(df['x'].values)
@@ -712,7 +733,7 @@ def count_assist(video_array, window_name="count assist", calibration=None):
     num_frames = video_array.shape[0]
     if num_frames == 0:
         print("Warning: Empty video array.")
-        return pd.DataFrame(columns=['worm_id', 'x', 'y', 'frame'])
+        return pd.DataFrame(columns=['worm_id', 'x', 'y', 'frame', 'phenotype'])
 
     residuals, _, _ = fit_pixel_linear_model(video_array)
     motion_proj = np.mean(residuals ** 2, axis=0)
