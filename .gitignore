@@ -6,3 +6,4 @@ testing/
 *.png
 *.mp4
 *.csv
+*.DS_Store
