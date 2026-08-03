@@ -2,7 +2,11 @@ import cv2
 import numpy as np
 import pandas as pd
 
-from wormtrails.quantitative import measure_window, calculate_relative_metrics
+from wormtrails.quantitative import (
+    measure_window,
+    calculate_relative_metrics,
+    create_plate_mask,
+)
 
 __all__ = [
     'show_motion',
@@ -149,6 +153,7 @@ def measure_chemotaxis_streaming(
     maximum_size=1000,
     test_spot=None,
     calibration=None,
+    mask_radius=None,
 ):
     """
     Measures chemotaxis metrics while streaming a video from disk.
@@ -179,6 +184,10 @@ def measure_chemotaxis_streaming(
             test spot. If None (default), relative-angle metrics are omitted.
         calibration: Optional :class:`~wormtrails.Calibration` for converting
             pixel/frame units to physical units. Default is None.
+        mask_radius: Optional integer radius of the circular plate mask, used
+            to isolate the assay area from plate boundaries. If None or 0
+            (default), no masking is applied — worms detected outside the
+            plate are kept.
 
     Returns:
         pandas.DataFrame with one row per detected worm trail per window.
@@ -191,6 +200,11 @@ def measure_chemotaxis_streaming(
 
     average_frame = get_average_frame(cap)
     n_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    plate_mask = None
+    if mask_radius:
+        ref = np.clip(average_frame, 0, 255).astype(np.uint8)
+        plate_mask = create_plate_mask(ref, mask_radius=mask_radius)
 
     worm_data = []
 
@@ -207,6 +221,8 @@ def measure_chemotaxis_streaming(
             # Threshold the motion frame into a binary worm mask
             binary = np.zeros_like(motion_frame, dtype=np.uint8)
             binary[motion_frame > thresh] = 255
+            if plate_mask is not None:
+                binary[plate_mask == 0] = 0
             binary_array.append(binary)
 
         binary_array = np.stack(binary_array, axis=0)

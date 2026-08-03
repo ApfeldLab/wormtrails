@@ -970,7 +970,7 @@ class WormtrailsGUI(QMainWindow):
 
         if self._chemo_should_stream():
             # Streaming reads windows from disk; it performs its own
-            # thresholding and (by design) does not apply the plate mask.
+            # thresholding and applies the plate mask when a radius is set.
             df = wts.measure_chemotaxis_streaming(
                 self.video_path,
                 thresh=prep['stream_threshold'],
@@ -981,6 +981,7 @@ class WormtrailsGUI(QMainWindow):
                 maximum_size=max_sz,
                 test_spot=test_spot,
                 calibration=cal,
+                mask_radius=prep['mask_radius'],
             )
         else:
             corrected = self._ensure_corrected(prep['vig'])
