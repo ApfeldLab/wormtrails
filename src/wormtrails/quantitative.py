@@ -577,11 +577,16 @@ def measure_window(binary_window, time_window, minimum_size=10, maximum_size=100
                 window_data.append(metrics)
     return window_data
 
-def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None, calibration=None):
+def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=10, maximum_size=1000, test_spot=None, calibration=None, mode='auto', n_jobs=-1):
     """
     Measures chemotaxis metrics over time windows using a 2D projection approach.
     Analyzes binary video data to compute position, direction, speed, and relative angle to a test spot.
-    
+
+    This is a dispatcher between the sequential and parallel backends, chosen
+    via ``mode``: 'auto' routes to parallel when there are many windows and
+    otherwise to sequential; an explicit 'sequential' or 'parallel' forces the
+    corresponding backend.
+
     Args:
         binary_array: 3D Numpy array of shape (time, height, width) containing 8-bit unsigned integers (0/255 binary).
         time_window: Number of frames in each sliding window to analyze. Default is 10.
@@ -591,7 +596,12 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
         test_spot: Tuple or array of (y, x) absolute coordinates for the test spot or bait location. If None (default), relative angle metrics are not computed.
         calibration: Optional Calibration object for converting pixel/frame units to physical units.
             When provided, additional columns with physical units are added to the output DataFrame.
-        
+        mode: String selecting the backend. One of 'auto' (default),
+            'sequential', or 'parallel'. 'auto' parallelises when there are
+            more than 15 windows.
+        n_jobs: Integer number of parallel workers for the 'parallel' backend
+            (-1 for all cores). Default is -1.
+
     Returns:
         A pandas DataFrame with one row per detected worm trail, containing columns:
             - 'y', 'x': Position of the component (pixels)
@@ -604,27 +614,70 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
             - 'speed_mm_s': Speed in mm/s (if calibration provided)
             - 'r_mm': Radial distance in mm (if calibration and test_spot provided)
             - 'trail_radius_mm', 'worm_radius_mm': Trail/worm radii in mm (if calibration provided)
-            
+
         Prints progress indicator during processing.
 
     Notes:
         - Uses sliding window approach with specified overlap
         - Progress is printed to stdout with frame count indicator
     """
+    n_windows = (binary_array.shape[0] - time_window + 1) // interval
+
+    if mode == 'parallel' or (mode == 'auto' and n_windows > 15):
+        return measure_chemotaxis_parallel(
+            binary_array,
+            time_window=time_window,
+            interval=interval,
+            minimum_size=minimum_size,
+            maximum_size=maximum_size,
+            test_spot=test_spot,
+            calibration=calibration,
+            n_jobs=n_jobs,
+        )
+    if mode == 'auto' or mode == 'sequential':
+        return _measure_chemotaxis_sequential(
+            binary_array, time_window, interval, minimum_size,
+            maximum_size, test_spot, calibration,
+        )
+    raise ValueError(
+        f"Unknown mode={mode!r}. Expected one of 'auto', 'sequential', 'parallel'."
+    )
+
+
+def _measure_chemotaxis_sequential(binary_array, time_window, interval, minimum_size, maximum_size, test_spot, calibration):
+    """
+    Sequential in-memory implementation of chemotaxis measurement.
+
+    Sliding-window analysis over the binary array, computing movement metrics
+    for each detected component. This is the reference implementation used by
+    the dispatcher.
+
+    Args:
+        binary_array: 3D Numpy array of uint8 (binary 0/255), time as axis 0.
+        time_window: Number of frames per analysis window.
+        interval: Frame step between consecutive window starts.
+        minimum_size: Minimum 2D projection area (pixels) for a component.
+        maximum_size: Maximum 2D projection area (pixels) for a component.
+        test_spot: Optional (y, x) relative-angle reference.
+        calibration: Optional Calibration object for physical units.
+
+    Returns:
+        pandas.DataFrame of chemotaxis metrics.
+    """
     worm_data = []
-    
+
     # Iterate for consecutive time windows
     for t in range(0, binary_array.shape[0] - time_window + 1, interval):
         print(f'{t}/{binary_array.shape[0]}', end="\r")
-        
+
         window_metrics = measure_window(binary_array[t:t+time_window], time_window, minimum_size, maximum_size, calibration=calibration)
-        
+
         for m in window_metrics:
             m['time'] = t
             # Calculate chemotaxis-specific metrics
             pos = np.array([m['y'], m['x']])
             direction = np.array([m['direction_y'], m['direction_x']])
-            
+
             if test_spot is not None:
                 r, theta, rel_angle = calculate_relative_metrics(pos, direction, test_spot)
                 m['r'] = r
@@ -632,7 +685,7 @@ def measure_chemotaxis(binary_array, time_window=10, interval=60, minimum_size=1
                 m['relative_angle'] = rel_angle
                 if calibration is not None:
                     m['r_mm'] = calibration.distance_mm(r)
-            
+
             worm_data.append(m)
 
     return pd.DataFrame(worm_data)
@@ -663,7 +716,9 @@ def measure_chemotaxis_parallel(binary_array, time_window=10, interval=60, minim
     n_windows = (binary_array.shape[0] - time_window + 1) // interval
     
     if n_windows <= 15:
-        return measure_chemotaxis(binary_array, time_window, interval, minimum_size, maximum_size, test_spot, calibration)
+        return _measure_chemotaxis_sequential(
+            binary_array, time_window, interval, minimum_size, maximum_size, test_spot, calibration
+        )
     
     window_starts = list(range(0, binary_array.shape[0] - time_window + 1, interval))
     

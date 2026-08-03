@@ -59,5 +59,43 @@ class TestProcessing(unittest.TestCase):
         resid, _, _ = fit_pixel_linear_model(self.video)
         self.assertGreater(np.max(np.abs(resid)), 0)
 
+    def test_time_encoded_array_backends_equivalent(self):
+        motion = subtract_average(self.video, use_absolute_difference=True, in_place=False)
+        seq = create_time_encoded_array(motion, window=3, mode='sequential')
+        vec = create_time_encoded_array(motion, window=3, mode='vectorized')
+        par = create_time_encoded_array(motion, window=3, mode='parallel')
+        self.assertTrue(np.array_equal(seq, vec))
+        self.assertTrue(np.array_equal(seq, par))
+
+    def test_time_encoded_array_auto_routes_to_sequential(self):
+        motion = subtract_average(self.video, use_absolute_difference=True, in_place=False)
+        auto = create_time_encoded_array(motion, window=3, mode='auto')
+        seq = create_time_encoded_array(motion, window=3, mode='sequential')
+        self.assertTrue(np.array_equal(auto, seq))
+
+    def test_time_encoded_array_path_requires_stream_mode(self):
+        with self.assertRaises(ValueError):
+            create_time_encoded_array("does-not-exist.avi", mode='sequential')
+
+    def test_time_encoded_array_array_rejects_stream_mode(self):
+        with self.assertRaises(ValueError):
+            create_time_encoded_array(self.video, mode='stream')
+
+    def test_time_encoded_array_unknown_mode_raises(self):
+        with self.assertRaises(ValueError):
+            create_time_encoded_array(self.video, mode='bogus')
+
+    def test_time_encoded_frame_backends_equivalent(self):
+        from wormtrails.processing import create_time_encoded_frame
+        motion = subtract_average(self.video, use_absolute_difference=True, in_place=False)
+        seq = create_time_encoded_frame(motion, window=3, start_time=2, mode='sequential')
+        vec = create_time_encoded_frame(motion, window=3, start_time=2, mode='vectorized')
+        self.assertTrue(np.array_equal(seq, vec))
+
+    def test_time_encoded_frame_unknown_mode_raises(self):
+        from wormtrails.processing import create_time_encoded_frame
+        with self.assertRaises(ValueError):
+            create_time_encoded_frame(self.video, mode='stream')
+
 if __name__ == '__main__':
     unittest.main()

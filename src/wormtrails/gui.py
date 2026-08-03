@@ -13,7 +13,7 @@ from PySide6.QtCore import Qt, QObject, Signal
 from PySide6.QtGui import QFont
 
 import wormtrails as wts
-from wormtrails.processing import create_time_encoded_frame, create_time_encoded_frame_vectorized, fit_pixel_linear_model, subtract_average
+from wormtrails.processing import create_time_encoded_frame, fit_pixel_linear_model, subtract_average
 
 __all__ = ['main']
 
@@ -301,8 +301,8 @@ class WormtrailsGUI(QMainWindow):
         self._te_offset.setText("0")
         self._te_start_frame = te.add_label_entry("Start Frame:", 4)
         self._te_light = te.add_checkbutton("Light Background", 5, default=True)
-        self._te_vectorized = te.add_checkbutton("Use Vectorized Frame", 6)
-        self._te_parallel = te.add_checkbutton("Use Parallel (save)", 7)
+        self._te_backend = te.add_combobox(
+            "Backend:", ["Auto", "Sequential", "Vectorized", "Parallel"], 6, default="Auto")
         layout.addWidget(te)
 
         self.vis_progress = ProgressLabel()
@@ -419,6 +419,15 @@ class WormtrailsGUI(QMainWindow):
         )
         _scheduler.schedule(lambda f=frame: wts.show_frame(f))
 
+    def _te_mode(self):
+        """Maps the Backend combobox selection to a dispatcher mode string."""
+        return {
+            "Auto": "auto",
+            "Sequential": "sequential",
+            "Vectorized": "vectorized",
+            "Parallel": "parallel",
+        }.get(self._te_backend.currentText(), "auto")
+
     def _do_save_frame(self):
         vig = self._get_vig_params()
         corrected = self._ensure_corrected(vig)
@@ -427,26 +436,20 @@ class WormtrailsGUI(QMainWindow):
         motion = self._ensure_motion(corrected, method, sub)
         te_params = self._get_te_params()
         start_frame = _safe_int(self._te_start_frame.text(), 0)
-        if self._te_vectorized.isChecked():
-            frame = create_time_encoded_frame_vectorized(
-                motion,
-                colormap=te_params['colormap'],
-                window=te_params['window'],
-                start_time=start_frame,
-                scale_factor=te_params['scale_factor'],
-                offset=te_params['offset'],
-                light_background=te_params['light_background'],
-            )
-        else:
-            frame = create_time_encoded_frame(
-                motion,
-                colormap=te_params['colormap'],
-                window=te_params['window'],
-                start_time=start_frame,
-                scale_factor=te_params['scale_factor'],
-                offset=te_params['offset'],
-                light_background=te_params['light_background'],
-            )
+        mode = self._te_mode()
+        if mode == "parallel":
+            # A single frame has no parallel benefit; fall back to sequential.
+            mode = "sequential"
+        frame = create_time_encoded_frame(
+            motion,
+            colormap=te_params['colormap'],
+            window=te_params['window'],
+            start_time=start_frame,
+            scale_factor=te_params['scale_factor'],
+            offset=te_params['offset'],
+            light_background=te_params['light_background'],
+            mode=mode,
+        )
         _scheduler.schedule(lambda f=frame: self._save_frame_dialog(f))
 
     def _save_frame_dialog(self, frame):
@@ -468,24 +471,15 @@ class WormtrailsGUI(QMainWindow):
             "MP4 Files (*.mp4);;AVI Files (*.avi)")
         if not path:
             return
-        if self._te_parallel.isChecked():
-            trails = wts.create_time_encoded_array_parallel(
-                self._motion,
-                colormap=self._te_params['colormap'],
-                window=self._te_params['window'],
-                scale_factor=self._te_params['scale_factor'],
-                offset=self._te_params['offset'],
-                light_background=self._te_params['light_background'],
-            )
-        else:
-            trails = wts.create_time_encoded_array(
-                self._motion,
-                colormap=self._te_params['colormap'],
-                window=self._te_params['window'],
-                scale_factor=self._te_params['scale_factor'],
-                offset=self._te_params['offset'],
-                light_background=self._te_params['light_background'],
-            )
+        trails = wts.create_time_encoded_array(
+            self._motion,
+            colormap=self._te_params['colormap'],
+            window=self._te_params['window'],
+            scale_factor=self._te_params['scale_factor'],
+            offset=self._te_params['offset'],
+            light_background=self._te_params['light_background'],
+            mode=self._te_mode(),
+        )
         if path.endswith('.avi'):
             wts.write_avi(trails, path)
         else:
@@ -760,9 +754,14 @@ class WormtrailsGUI(QMainWindow):
         self._chemo_fps = chemo_cal.add_label_entry("Frames per second:", 1)
         layout.addWidget(chemo_cal)
 
-        self._chemo_parallel = QCheckBox("Use Parallel")
-        self._chemo_parallel.setChecked(False)
-        layout.addWidget(self._chemo_parallel)
+        self._chemo_backend = QComboBox()
+        self._chemo_backend.addItems(["Auto", "Sequential", "Parallel"])
+        self._chemo_backend.setCurrentText("Auto")
+        backend_layout = QHBoxLayout()
+        backend_layout.addWidget(QLabel("Backend:"))
+        backend_layout.addWidget(self._chemo_backend)
+        backend_layout.addStretch()
+        layout.addLayout(backend_layout)
 
         self.chemo_progress = ProgressLabel()
         layout.addWidget(self.chemo_progress)
@@ -839,26 +838,21 @@ class WormtrailsGUI(QMainWindow):
                 return
 
         cal = self._get_calibration(self._chemo_px_per_mm, self._chemo_fps)
-        if self._chemo_parallel.isChecked():
-            df = wts.measure_chemotaxis_parallel(
-                motion,
-                time_window=_safe_int(self.chemo_window.text(), 10),
-                interval=_safe_int(self.chemo_int.text(), 60),
-                minimum_size=_safe_int(self.chemo_min.text(), 10),
-                maximum_size=_safe_int(self.chemo_max.text(), 1000),
-                test_spot=test_spot,
-                calibration=cal,
-            )
-        else:
-            df = wts.measure_chemotaxis(
-                motion,
-                time_window=_safe_int(self.chemo_window.text(), 10),
-                interval=_safe_int(self.chemo_int.text(), 60),
-                minimum_size=_safe_int(self.chemo_min.text(), 10),
-                maximum_size=_safe_int(self.chemo_max.text(), 1000),
-                test_spot=test_spot,
-                calibration=cal,
-            )
+        mode = {
+            "Auto": "auto",
+            "Sequential": "sequential",
+            "Parallel": "parallel",
+        }.get(self._chemo_backend.currentText(), "auto")
+        df = wts.measure_chemotaxis(
+            motion,
+            time_window=_safe_int(self.chemo_window.text(), 10),
+            interval=_safe_int(self.chemo_int.text(), 60),
+            minimum_size=_safe_int(self.chemo_min.text(), 10),
+            maximum_size=_safe_int(self.chemo_max.text(), 1000),
+            test_spot=test_spot,
+            calibration=cal,
+            mode=mode,
+        )
 
         def request_save():
             save_path, _ = QFileDialog.getSaveFileName(

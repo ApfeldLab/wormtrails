@@ -80,5 +80,16 @@ class TestQuantitative(unittest.TestCase):
         df = measure_chemotaxis(self.binary_video, time_window=5, interval=2, minimum_size=5, maximum_size=500, test_spot=(100,100))
         self.assertTrue(isinstance(df, pd.DataFrame))
 
+    def test_measure_chemotaxis_backends_equivalent(self):
+        seq = measure_chemotaxis(self.binary_video, time_window=5, interval=2, minimum_size=5, maximum_size=500, mode='sequential')
+        par = measure_chemotaxis(self.binary_video, time_window=5, interval=2, minimum_size=5, maximum_size=500, mode='parallel')
+        auto = measure_chemotaxis(self.binary_video, time_window=5, interval=2, minimum_size=5, maximum_size=500, mode='auto')
+        self.assertTrue(seq.equals(par))
+        self.assertTrue(seq.equals(auto))
+
+    def test_measure_chemotaxis_unknown_mode_raises(self):
+        with self.assertRaises(ValueError):
+            measure_chemotaxis(self.binary_video, time_window=5, interval=2, mode='stream')
+
 if __name__ == '__main__':
     unittest.main()

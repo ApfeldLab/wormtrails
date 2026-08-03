@@ -190,43 +190,148 @@ def create_track_array(average_subtracted_array, window):
 
     return np.stack(track_array, axis=0)
 
-def create_time_encoded_array(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, scale_factor=1, offset=0, light_background=True):
+def _create_time_encoded_array_sequential(average_subtracted_array, colormap, window, scale_factor, offset, light_background):
     """
-    Projects along the time axis of the average subtracted array within a local frame window of the specified size to create frames with trails.
-    Shorter windows make intuitive speed by trail length easier to see and work better for scans of densely populated plates.
-    Longer windows are better for seeing behavioral movement patterns, as long as the plate isn't too densely populated.
-    This implementation supports colormaps to encode time within frames.
-    
+    Sequential in-memory implementation of time-encoded trail creation.
+
+    Loops over every frame position and builds one trail frame per window
+    start. This is the reference implementation used by the dispatcher and is
+    invoked directly by the parallel backend for small inputs.
+
     Args:
-        average_subtracted_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the average subtracted video frames, with time as axis 0.
-        colormap: Numpy array of shape (N, 3) containing the colormap colors (B, G, R values 0-255), applied to each trail frame to encode temporal information.
-        window: Integer value for the window size (number of frames to look back) used to create trails. Shorter windows take less processing time and enhance speed perception.
-        scale_factor: Float value for the scaling factor, applied to the trails to adjust brightness. Higher values increase contrast. Default is 1.
-        offset: Integer or float value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
-        light_background: Boolean value. If True, assumes dark trails on light background and inverts the trail rendering. If False, assumes bright trails on dark background.
+        average_subtracted_array: 3D Numpy array of uint8, time as axis 0.
+        colormap: Numpy array of shape (N, 3) of BGR colors.
+        window: Integer number of frames per trail.
+        scale_factor: Float brightness scaling factor.
+        offset: Float brightness offset.
+        light_background: Boolean; if True, renders dark trails on light.
 
     Returns:
-        time_encoded_array: 4D Numpy array of 8 bit unsigned integers (uint8) containing the time encoded array of frames with trails, with shape (time, height, width, 3), where axis 0 is time and axis 3 is color channels.
-
-    Notes:
-        Only returns arrays up to the last frame where a complete window fits.
-
-        When using symmetric (grayscale) colormaps such as white_to_black or black_to_white,
-        flipping light_background is equivalent to using the opposite colormap.
-        For asymmetric colormaps (e.g. blue_to_red), light_background flips the color channel
-        values, producing visually distinct (complementary) output rather than identical results.
-        To reverse temporal ordering regardless of colormap, swap it for its inverse
-        (e.g. blue_to_red for red_to_blue, white_to_black for black_to_white).
+        4D Numpy array of uint8 with shape (n_frames, H, W, 3).
     """
-    
     time_encoded_array = []
 
-    # loop through the average subtracted array and create time encoded frames for the windows starting at each frame
-    for i in range(average_subtracted_array.shape[0]-window):
-        time_encoded_frame = create_time_encoded_frame(average_subtracted_array, colormap=colormap, window=window, start_time=i, scale_factor=scale_factor, offset=offset, light_background=light_background)
-        time_encoded_array.append(time_encoded_frame)
+    # Loop through the average subtracted array and create time encoded frames
+    # for the windows starting at each frame
+    for i in range(average_subtracted_array.shape[0] - window):
+        frame = create_time_encoded_frame(
+            average_subtracted_array,
+            colormap=colormap,
+            window=window,
+            start_time=i,
+            scale_factor=scale_factor,
+            offset=offset,
+            light_background=light_background,
+        )
+        time_encoded_array.append(frame)
 
     return np.stack(time_encoded_array, axis=0)
+
+
+def create_time_encoded_array(source, colormap=np.array([[0,0,0]]), window=20, scale_factor=1, offset=0, light_background=True, mode='auto', n_jobs=-1, save_path=None, worm_length=10):
+    """
+    Creates a time-encoded trail video from either an in-memory array or a file on disk.
+
+    This is a dispatcher: depending on the input and the ``mode`` argument, it
+    routes to one of several backend implementations.
+
+    * ``str`` input (a video path) is routed to the streaming pipeline, which
+      reads frames one at a time from disk and never materialises the full
+      array. This is chosen automatically when the input is a path.
+    * Numpy array input is processed in memory, routed between the
+      ``sequential``, ``vectorized``, or ``parallel`` backends.
+
+    Args:
+        source: Either a 3D Numpy array (uint8, time as axis 0) of average
+            subtracted frames, or a string path to a video file.
+        colormap: Numpy array of shape (N, 3) of BGR colors applied to each
+            trail frame to encode temporal information.
+        window: Integer number of frames to look back for each trail. Shorter
+            windows take less processing time; longer windows reveal motion
+            patterns but suit less densely populated plates. Default is 20.
+        scale_factor: Float scaling factor applied to trail brightness. Higher
+            values increase contrast. Default is 1.
+        offset: Float brightness offset; positive brightens, negative
+            counteracts noise. Default is 0.
+        light_background: Boolean. If True, renders dark trails on a light
+            background; if False, bright trails on dark. Default is True.
+        mode: String selecting the backend. One of 'auto' (default), 'sequential',
+            'vectorized', 'parallel', or 'stream'. 'auto' streams for path input
+            and otherwise chooses a parallel or sequential in-memory backend
+            based on frame count. An explicit mode forces that backend.
+        n_jobs: Integer number of parallel workers for the 'parallel' backend
+            (-1 for all cores). Default is -1.
+        save_path: Optional string path used only for streaming (path) input,
+            to write the resulting time-encoded video to an MP4 file. If None,
+            the streaming pipeline only previews interactively. Default is None.
+        worm_length: Integer typical worm length in pixels, used only for
+            streaming (path) input as the high-pass kernel radius. Default is 10.
+
+    Returns:
+        4D Numpy array of uint8 with shape (n_frames, H, W, 3) for in-memory
+        input, or the return value of the streaming pipeline (which writes to
+        ``save_path`` and previews) for path input.
+
+    Raises:
+        ValueError: If the explicit ``mode`` is incompatible with the input
+            type (e.g. an in-memory backend given a path, or 'stream' given
+            an array).
+    """
+    # A string source is a file path -> route to the streaming backend, which
+    # avoids loading the whole video into memory at once.
+    if isinstance(source, str):
+        if mode not in ('auto', 'stream'):
+            raise ValueError(
+                f"mode={mode!r} requires an in-memory Numpy array, but a video "
+                "path was given. Use mode='stream' or 'auto' for path input."
+            )
+        # Imported lazily to avoid a circular import (streaming imports
+        # processing indirectly through quantitative).
+        from wormtrails.streaming import create_time_encoded_array_streaming
+        return create_time_encoded_array_streaming(
+            source,
+            save_path=save_path,
+            worm_length=worm_length,
+            scale_factor=scale_factor,
+            offset=offset,
+            window=window,
+            colormap=colormap,
+            light_background=light_background,
+        )
+
+    if mode == 'stream':
+        raise ValueError(
+            "mode='stream' requires a video path (str) as input, but a Numpy "
+            "array was given. For in-memory input use 'sequential', "
+            "'vectorized', 'parallel', or 'auto'."
+        )
+
+    # In-memory input: route between sequential/vectorized/parallel backends.
+    valid = {'auto', 'sequential', 'vectorized', 'parallel'}
+    if mode not in valid:
+        raise ValueError(
+            f"Unknown mode={mode!r}. Expected one of {sorted(valid)} or 'stream'."
+        )
+
+    if mode == 'vectorized':
+        return np.stack(
+            [
+                create_time_encoded_frame_vectorized(
+                    source, colormap, window, i, scale_factor, offset, light_background
+                )
+                for i in range(source.shape[0] - window)
+            ],
+            axis=0,
+        )
+
+    if mode == 'parallel' or (mode == 'auto' and source.shape[0] - window > 20):
+        return create_time_encoded_array_parallel(
+            source, colormap, window, scale_factor, offset, light_background, n_jobs
+        )
+
+    return _create_time_encoded_array_sequential(
+        source, colormap, window, scale_factor, offset, light_background
+    )
 
 def create_time_encoded_array_parallel(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, scale_factor=1, offset=0, light_background=True, n_jobs=-1):
     """Parallel version of create_time_encoded_array using joblib.
@@ -251,7 +356,9 @@ def create_time_encoded_array_parallel(average_subtracted_array, colormap=np.arr
     
     # Use sequential mode for small arrays to avoid parallelization overhead
     if n_frames <= 20:
-        return create_time_encoded_array(average_subtracted_array, colormap, window, scale_factor, offset, light_background)
+        return _create_time_encoded_array_sequential(
+            average_subtracted_array, colormap, window, scale_factor, offset, light_background
+        )
     
     results = Parallel(n_jobs=n_jobs, prefer='threads')(
         delayed(create_time_encoded_frame)(average_subtracted_array, colormap, window, i, scale_factor, offset, light_background)
@@ -260,53 +367,106 @@ def create_time_encoded_array_parallel(average_subtracted_array, colormap=np.arr
     
     return np.stack(results, axis=0)
 
-def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, start_time=0, scale_factor=1, offset=0, light_background=True):
+def create_time_encoded_frame(average_subtracted_array, colormap=np.array([[0,0,0]]), window=20, start_time=0, scale_factor=1, offset=0, light_background=True, mode='auto'):
     """
-    Projects along the time axis of the average subtracted array within a local frame window of the specified size to create a single frame with trails.
-    This implementation supports colormaps to encode time within frames.
-    
+    Creates a single time-encoded (trail) frame from average subtracted frames.
+
+    This is a dispatcher between the sequential in-memory implementation
+    (default) and the vectorized implementation, selected via ``mode``:
+    'auto' and 'sequential' use the slower, memory-lean loop; 'vectorized'
+    uses the faster but memory-heavier implementation.
+
     Args:
-        average_subtracted_array: 3D Numpy array of 8 bit unsigned integers (uint8) containing the average subtracted video frames, with time as axis 0.
-        colormap: Numpy array of shape (N, 3) containing the colormap colors (B, G, R values 0-255), applied to the trail frame with color values being applied in order scaled to the window size.
-        window: Integer value for the window size (number of frames to look back), used to create trails. Shorter windows take less processing time.
-        start_time: Integer value for the start time of the frame. The window starts at this frame and continues forward for the specified window size.
-        scale_factor: Float value for the scaling factor, applied to the trails to adjust brightness. Higher values increase contrast. Default is 1.
-        offset: Integer or float value for the brightness offset, positive values brighten the image, negative values darken it and can counteract noise. Default is 0.
-        light_background: Boolean value. If True, assumes dark trails on light background and inverts the trail rendering. If False, assumes bright trails on dark background.
+        average_subtracted_array: 3D Numpy array of 8 bit unsigned integers
+            (uint8) containing the average subtracted video frames, with time
+            as axis 0.
+        colormap: Numpy array of shape (N, 3) containing the colormap colors
+            (B, G, R values 0-255), applied to the trail frame with color
+            values applied in order scaled to the window size.
+        window: Integer number of frames to look back, used to create trails.
+        start_time: Integer start time of the frame. The window starts at this
+            frame and continues forward for the specified window size.
+            Default is 0.
+        scale_factor: Float scaling factor applied to trail brightness. Higher
+            values increase contrast. Default is 1.
+        offset: Float brightness offset; positive brightens, negative
+            counteracts noise. Default is 0.
+        light_background: Boolean. If True, renders dark trails on a light
+            background; if False, bright trails on dark. Default is True.
+        mode: String selecting the backend. One of 'auto' (default),
+            'sequential', or 'vectorized'.
 
     Returns:
-        time_encoded_frame: 3D Numpy array of 8 bit unsigned integers (uint8) containing the time encoded frame with trails, with color channel as axis 3 (last axis), shape (height, width, 3).
+        time_encoded_frame: 3D Numpy array of uint8 with shape (height, width,
+            3) containing the time encoded frame with trails.
 
-    Notes:
-        Uses numpy minimum/maximum projection to combine trail information from multiple frames.
+    Raises:
+        ValueError: If ``mode`` is not a valid backend name.
+    """
+    if mode in ('auto', 'sequential'):
+        return _create_time_encoded_frame_sequential(
+            average_subtracted_array, colormap, window, start_time,
+            scale_factor, offset, light_background,
+        )
+    if mode == 'vectorized':
+        return create_time_encoded_frame_vectorized(
+            average_subtracted_array, colormap, window, start_time,
+            scale_factor, offset, light_background,
+        )
+    raise ValueError(
+        f"Unknown mode={mode!r}. Expected one of 'auto', 'sequential', "
+        "'vectorized'."
+    )
 
-        When using symmetric (grayscale) colormaps such as white_to_black or black_to_white,
-        flipping light_background is equivalent to using the opposite colormap.
-        For asymmetric colormaps (e.g. blue_to_red), light_background flips the color channel
-        values, producing visually distinct (complementary) output rather than identical results.
-        To reverse temporal ordering regardless of colormap, swap it for its inverse
-        (e.g. blue_to_red for red_to_blue, white_to_black for black_to_white).
+
+def _create_time_encoded_frame_sequential(average_subtracted_array, colormap, window, start_time, scale_factor, offset, light_background):
+    """
+    Sequential in-memory implementation of a single time-encoded frame.
+
+    Loops over the window, building a colormapped frame per input frame and
+    combining them with a minimum (light background) or maximum (dark
+    background) projection.
+
+    Args:
+        average_subtracted_array: 3D Numpy array of uint8, time as axis 0.
+        colormap: Numpy array of shape (N, 3) of BGR colors.
+        window: Integer number of frames per trail.
+        start_time: Integer index of the first frame of the window.
+        scale_factor: Float brightness scaling factor.
+        offset: Float brightness offset.
+        light_background: Boolean; True renders dark trails on light.
+
+    Returns:
+        3D Numpy array of uint8 with shape (height, width, 3).
     """
     time_encoded_frame = None
 
-    # loop through the window and create colormapped frames
+    # Loop through the window and create colormapped frames
     for t in range(window):
-        tmap = colormap[int(np.shape(colormap)[0]*t/window),:] # get the color for the current frame from the colormap
-        if light_background: # invert the color used for colormapping if using a light background since it's going to be inverted back later
+        tmap = colormap[int(np.shape(colormap)[0] * t / window), :]  # get the color for the current frame from the colormap
+        if light_background:  # invert the color used for colormapping if using a light background since it's going to be inverted back later
             tmap = 255 - tmap
 
-        # set the color of each pixel based on the colormap and the brightness based on the corresponding average subtracted frame
-        colormapped_frame = np.clip(cv2.merge([tmap[0]*average_subtracted_array[start_time+t]/255, tmap[1]*average_subtracted_array[start_time+t]/255, tmap[2]*average_subtracted_array[start_time+t]/255])*scale_factor + offset, 0, 255).astype(np.uint8)
-        if light_background: # invert the colormapped frame if a light background is desired
+        # Set the color of each pixel based on the colormap and the brightness based on the corresponding average subtracted frame
+        colormapped_frame = np.clip(
+            cv2.merge([
+                tmap[0] * average_subtracted_array[start_time + t] / 255,
+                tmap[1] * average_subtracted_array[start_time + t] / 255,
+                tmap[2] * average_subtracted_array[start_time + t] / 255,
+            ]) * scale_factor + offset, 0, 255,
+        ).astype(np.uint8)
+        if light_background:  # invert the colormapped frame if a light background is desired
             colormapped_frame = 255 - colormapped_frame
 
-        # initialize or update the time encoded frame
+        # Initialize or update the time encoded frame
         if time_encoded_frame is None:
             time_encoded_frame = colormapped_frame
         elif light_background:
-            time_encoded_frame = np.min([time_encoded_frame, colormapped_frame], axis=0) # minimum pixel value is used for projections if we want dark tracks on a light background
+            # Minimum pixel value is used for projections if we want dark tracks on a light background
+            time_encoded_frame = np.min([time_encoded_frame, colormapped_frame], axis=0)
         else:
-            time_encoded_frame = np.max([time_encoded_frame, colormapped_frame], axis=0) # maximum pixel value is used for projections if we want light tracks on a dark background
+            # Maximum pixel value is used for projections if we want light tracks on a dark background
+            time_encoded_frame = np.max([time_encoded_frame, colormapped_frame], axis=0)
 
     return time_encoded_frame
 
