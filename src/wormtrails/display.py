@@ -12,6 +12,23 @@ from PySide6.QtGui import (
 )
 from .processing import create_time_encoded_frame, fit_pixel_linear_model
 
+_PHENOTYPE_COLORS = [
+    (255, 200, 0),
+    (0, 200, 255),
+    (0, 255, 0),
+    (255, 0, 255),
+    (255, 140, 0),
+    (0, 255, 180),
+    (180, 255, 0),
+    (255, 90, 180),
+]
+
+
+def _phenotype_color(phenotype):
+    idx = sum(ord(c) for c in phenotype) % len(_PHENOTYPE_COLORS)
+    r, g, b = _PHENOTYPE_COLORS[idx]
+    return QColor(r, g, b)
+
 __all__ = [
     'show_video_array',
     'show_frame',
@@ -628,10 +645,11 @@ class _CountAssistDialog(QDialog, _ZoomPanMixin):
             rx, ry = int(round(lx)), int(round(ly))
             painter.setBrush(QColor(255, 0, 0))
             painter.drawEllipse(rx - 3, ry - 3, 6, 6)
-            label = str(m['worm_id'])
+            painter.drawText(rx + 4, ry - 4, str(m['worm_id']))
             if m.get('phenotype'):
-                label += f":{m['phenotype']}"
-            painter.drawText(rx + 4, ry - 4, label)
+                painter.setPen(_phenotype_color(m['phenotype']))
+                painter.drawText(rx + 4, ry + 20, m['phenotype'])
+                painter.setPen(pen)
 
         painter.end()
 
