@@ -628,7 +628,10 @@ class _CountAssistDialog(QDialog, _ZoomPanMixin):
             rx, ry = int(round(lx)), int(round(ly))
             painter.setBrush(QColor(255, 0, 0))
             painter.drawEllipse(rx - 3, ry - 3, 6, 6)
-            painter.drawText(rx + 4, ry - 4, str(m['worm_id']))
+            label = str(m['worm_id'])
+            if m.get('phenotype'):
+                label += f":{m['phenotype']}"
+            painter.drawText(rx + 4, ry - 4, label)
 
         painter.end()
 
@@ -684,7 +687,7 @@ class _CountAssistDialog(QDialog, _ZoomPanMixin):
 
     def keyPressEvent(self, event: QKeyEvent):
         self._track_phenotype_key(event, pressed=True)
-        if event.key() in (Qt.Key_Escape, Qt.Key_Q):
+        if event.key() == Qt.Key_Escape:
             self.close()
         elif event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
             if self.markers:
