@@ -50,3 +50,6 @@ colormap = cv2.imread("./hue_ramps_16.png").astype(np.int64)[0,:,:]
 ```
 
 Single colors may be applied as a colormap by their BGR value. For example, to color trails green, the parameter `colormap=np.array([[0,255,0]])` may be used for any visualization function.
+
+## Imaging setup
+The scripts we used to capture videos and a description of our setup can be found in `examples/setup`, along with an adjustable 3D model for a light guide which can increase contrast.
